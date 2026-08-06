@@ -1,0 +1,34 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+
+.env
+.env.local
+.env.*.local
+!.env.example
+!.env.local.example
+
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.tsbuildinfo
+*.tsbuildinfo
+
+# Local export scratch
+tmp/
+*.zip
+
+# Packaging output — each edition exe is ~60 MB, well past GitHub's limits.
+# Rebuild them with `node build-exe.mjs`.
+dist-exe/
+pkg-stage/
+
+# Batch run artefacts, in case anyone points the output at the repo.
+_batch-state.json
+_batch-report.txt
+
+# Local agent/editor config
+.claude/

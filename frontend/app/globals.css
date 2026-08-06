@@ -1,0 +1,233 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Base — a cool near-black with a blue cast, so imagery reads warm against it */
+  --color-ink-950: #060910;
+  --color-ink-900: #0a0f1a;
+  --color-ink-850: #0e1522;
+  --color-ink-800: #131c2b;
+  --color-ink-700: #1c2739;
+  --color-ink-600: #2a3850;
+
+  --color-mist-50: #f4f8ff;
+  --color-mist-200: #c8d4e8;
+  --color-mist-400: #8496b5;
+  --color-mist-500: #64758f;
+
+  /* Primary accent — aqua reads bright on dark without vibrating like pure cyan */
+  --color-aqua-300: #7df5e4;
+  --color-aqua-400: #34e0c8;
+  --color-aqua-500: #14c8b0;
+  --color-aqua-600: #0ea593;
+
+  /* Secondary accent for ratings, HD badges, highlights */
+  --color-ember-300: #ffd28a;
+  --color-ember-400: #ffb64d;
+  --color-ember-500: #f59e0b;
+
+  --font-sans:
+    'Inter var', 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+
+  --radius-panel: 1.25rem;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-ink-950);
+  color: var(--color-mist-50);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden; /* the app manages its own scroll regions */
+}
+
+/* Ambient glow behind the whole app — keeps flat dark from looking dead */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(60rem 40rem at 12% -10%, rgb(20 200 176 / 0.10), transparent 60%),
+    radial-gradient(50rem 34rem at 92% 8%, rgb(255 182 77 / 0.06), transparent 60%);
+}
+
+::selection {
+  background: var(--color-aqua-500);
+  color: var(--color-ink-950);
+}
+
+/* ---------------------------------------------------------------------------
+   Utilities
+   --------------------------------------------------------------------------- */
+
+@utility glass {
+  background: rgb(14 21 34 / 0.72);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgb(255 255 255 / 0.07);
+}
+
+@utility glass-strong {
+  background: rgb(10 15 26 / 0.92);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid rgb(255 255 255 / 0.09);
+}
+
+@utility ring-focus {
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--color-aqua-500),
+    0 0 0 4px rgb(20 200 176 / 0.18);
+}
+
+@utility text-balance-tight {
+  text-wrap: balance;
+  letter-spacing: -0.014em;
+}
+
+/* ---------------------------------------------------------------------------
+   Scrollbars — thin, unobtrusive, only visible on hover
+   --------------------------------------------------------------------------- */
+
+.scroll-region {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+  overscroll-behavior: contain;
+}
+
+.scroll-region::-webkit-scrollbar {
+  width: 10px;
+  height: 10px; /* horizontal regions (the quick-pick row) need this too */
+}
+
+.scroll-region::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-region::-webkit-scrollbar-thumb {
+  background-clip: content-box;
+  border: 3px solid transparent;
+  border-radius: 9999px;
+  background-color: rgb(255 255 255 / 0.10);
+}
+
+.scroll-region:hover::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.20);
+}
+
+/* ---------------------------------------------------------------------------
+   Motion
+   --------------------------------------------------------------------------- */
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-rise {
+  animation: rise 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgb(255 255 255 / 0.05);
+}
+
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.07), transparent);
+  animation: shimmer 1.6s infinite;
+}
+
+@keyframes ping-soft {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+.user-dot-ring {
+  animation: ping-soft 2.2s cubic-bezier(0.2, 0.6, 0.4, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .skeleton::after,
+  .user-dot-ring {
+    animation: none;
+  }
+  .animate-rise {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Google Maps chrome — retheme the InfoWindow to match the app
+   --------------------------------------------------------------------------- */
+
+.gm-style .gm-style-iw-c {
+  padding: 0 !important;
+  border-radius: 1rem;
+  background: #0e1522;
+  border: 1px solid rgb(255 255 255 / 0.10);
+  box-shadow: 0 24px 60px rgb(0 0 0 / 0.6);
+}
+
+.gm-style .gm-style-iw-d {
+  overflow: hidden !important;
+  padding: 0 !important;
+  background: transparent;
+}
+
+/* The little pointer triangle under the bubble */
+.gm-style .gm-style-iw-tc::after {
+  background: #0e1522;
+}
+
+.gm-style .gm-style-iw-c button.gm-ui-hover-effect {
+  top: 4px !important;
+  right: 4px !important;
+  opacity: 0.65;
+}
+
+.gm-style .gm-style-iw-c button.gm-ui-hover-effect > span {
+  background-color: var(--color-mist-200);
+}
+
+/* OpenStreetMap fallback iframe ships light tiles — invert them to fit the theme */
+.osm-dark {
+  filter: invert(0.92) hue-rotate(180deg) saturate(0.75) brightness(0.95) contrast(0.92);
+}

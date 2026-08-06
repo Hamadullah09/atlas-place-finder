@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: place-finder-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: placefinder
+      POSTGRES_PASSWORD: placefinder
+      POSTGRES_DB: placefinder
+    ports:
+      - '5432:5432'
+    volumes:
+      - place-finder-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U placefinder -d placefinder']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  place-finder-pgdata:
