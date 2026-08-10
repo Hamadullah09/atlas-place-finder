@@ -113,9 +113,20 @@ interface FilterReport {
   renamedToNonLatin: number;
   emptySummary: number;
   hoursInvented: number;
+  /** The offending sentences, so a violation can be diagnosed not just counted. */
+  hoursSamples: string[];
+  renamedSamples: string[];
   elapsedMs: number;
   warnings: string[];
 }
+
+/**
+ * An opening-hours claim, as opposed to a year or a price. Requires a clock
+ * time or a weekday paired with one — "opened in 1985" and "$10.00" are not
+ * schedule claims and must not be flagged.
+ */
+const HOURS_CLAIM =
+  /\b(?:[01]?\d|2[0-3])[:.][0-5]\d\s*(?:[-–—]|to\b|until\b)|\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\b[^.]{0,40}\b(?:[01]?\d|2[0-3])[:.][0-5]\d|\bopen(?:s|ing)?\b[^.]{0,30}\b(?:[01]?\d|2[0-3])[:.][0-5]\d/i;
 
 async function evalFilter(records: CorpusRecord[]): Promise<FilterReport> {
   const byCity = new Map<string, CorpusRecord[]>();
@@ -131,6 +142,8 @@ async function evalFilter(records: CorpusRecord[]): Promise<FilterReport> {
   let renamedToNonLatin = 0;
   let emptySummary = 0;
   let hoursInvented = 0;
+  const hoursSamples: string[] = [];
+  const renamedSamples: string[] = [];
   const warnings: string[] = [];
   const started = Date.now();
 
@@ -154,10 +167,14 @@ async function evalFilter(records: CorpusRecord[]): Promise<FilterReport> {
       const source = places.find((p) => p.id === entry.placeId);
       if (source && !isMostlyNonLatin(source.name) && isMostlyNonLatin(entry.name)) {
         renamedToNonLatin += 1;
+        if (renamedSamples.length < 4) renamedSamples.push(`${source.name} -> ${entry.name}`);
       }
       // An opening-hours claim is only legitimate if the place has the tag.
-      if (!source?.tags.opening_hours && /\b\d{1,2}[:.]\d{2}\b|\bopen(?:s|ing)?\b.*\b\d/i.test(entry.summary)) {
+      if (!source?.tags.opening_hours && HOURS_CLAIM.test(entry.summary)) {
         hoursInvented += 1;
+        if (hoursSamples.length < 4) {
+          hoursSamples.push(`${entry.name}: "${entry.summary.slice(0, 120)}"`);
+        }
       }
     }
   }
@@ -170,6 +187,8 @@ async function evalFilter(records: CorpusRecord[]): Promise<FilterReport> {
     renamedToNonLatin,
     emptySummary,
     hoursInvented,
+    hoursSamples,
+    renamedSamples,
     elapsedMs: Date.now() - started,
     warnings,
   };
@@ -343,6 +362,8 @@ async function main(): Promise<void> {
     say(`empty summary       : ${report.emptySummary}  (${pct(report.emptySummary, report.scored)})`);
     say(`renamed to non-Latin: ${report.renamedToNonLatin}  <- must be 0`);
     say(`hours w/o source    : ${report.hoursInvented}  <- must be 0`);
+    report.renamedSamples.forEach((sample) => say(`   renamed: ${sample}`));
+    report.hoursSamples.forEach((sample) => say(`   hours  : ${sample}`));
     say(`elapsed             : ${(report.elapsedMs / 1000).toFixed(1)}s`);
     const unique = [...new Set(report.warnings)].slice(0, 5);
     unique.forEach((warning) => say(`   warn: ${warning}`));

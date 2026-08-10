@@ -4,7 +4,7 @@ import { chunk, mapLimit } from '../lib/concurrency.js';
 import { stripUnsupportedHoursClaims } from '../lib/factCheck.js';
 import { fetchJson } from '../lib/http.js';
 import { cleanCompletion } from '../lib/llmText.js';
-import { cleanText } from '../lib/sanitize.js';
+import { cleanText, isMostlyNonLatin } from '../lib/sanitize.js';
 import type { PlaceContact, RawPlace } from '../types.js';
 
 /** Tags worth showing the model; everything else is noise or geometry. */
@@ -47,6 +47,18 @@ export interface EnrichedPlace {
   qualityScore: number;
   llmProcessed: boolean;
   reason?: string;
+}
+
+/**
+ * The cleaner sees the raw OSM tags, including the original-script `name`, and
+ * measurably echoes it back: the eval harness counted 7 places in 150 whose
+ * already-resolved English name was replaced by a CJK one. Never let a model
+ * answer undo a readable name — the folder name and PDF depend on it.
+ */
+function preferReadableName(candidate: string, fallback: string): string {
+  if (!candidate) return fallback;
+  if (isMostlyNonLatin(candidate) && !isMostlyNonLatin(fallback)) return fallback;
+  return candidate;
 }
 
 export interface EnrichContext {
@@ -362,7 +374,7 @@ function mergeLlmResult(place: RawPlace, fallback: EnrichedPlace, llm: LlmPlace)
   return {
     placeId: place.id,
     keep: shouldKeep(llm),
-    name: cleanText(llm.name, 200) || fallback.name,
+    name: preferReadableName(cleanText(llm.name, 200), fallback.name),
     // If stripping emptied the summary, fall back to the deterministic one
     // rather than shipping a place with no description at all.
     summary: checked.summary || fallback.summary,
