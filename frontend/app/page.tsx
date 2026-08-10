@@ -1,4 +1,3 @@
-import MapsKeyBadge from '@/components/MapsKeyBadge';
 import PlaceFinder from '@/components/PlaceFinder';
 
 /**
@@ -33,7 +32,6 @@ export default function HomePage() {
           </a>
 
           <div className="ml-auto flex items-center gap-2">
-            <MapsKeyBadge />
             <a
               href="https://www.openstreetmap.org/copyright"
               target="_blank"

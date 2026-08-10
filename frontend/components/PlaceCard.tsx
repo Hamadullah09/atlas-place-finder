@@ -1,19 +1,15 @@
 'use client';
 
 import { useState } from 'react';
-import GooglePlacePanel from '@/components/GooglePlaceDetails';
 import type { Place } from '@/lib/types';
 
 interface PlaceCardProps {
   place: Place;
   index: number;
   selected: boolean;
-  hasUserLocation: boolean;
   city: string;
-  googleEnabled: boolean;
   downloading: boolean;
   onSelect: (place: Place) => void;
-  onDirections: (place: Place) => void;
   onDownload: (place: Place) => void;
 }
 
@@ -28,12 +24,9 @@ export default function PlaceCard({
   place,
   index,
   selected,
-  hasUserLocation,
   city,
-  googleEnabled,
   downloading,
   onSelect,
-  onDirections,
   onDownload,
 }: PlaceCardProps) {
   const [expanded, setExpanded] = useState(false);
@@ -155,28 +148,8 @@ export default function PlaceCard({
         <TravelLinks place={place} />
       </div>
 
-      {/* Only the selected card fetches Google data — one billed Place Details
-          request per click instead of one per result in the list. */}
-      {googleEnabled && selected && <GooglePlacePanel place={place} city={city} variant="full" />}
-
       {/* Actions */}
       <div className="flex items-center gap-1.5 border-t border-white/[0.06] px-3 py-2">
-        <button
-          type="button"
-          disabled={!hasUserLocation}
-          title={hasUserLocation ? 'Route from your location' : 'Share your location first'}
-          onClick={(event) => {
-            event.stopPropagation();
-            onDirections(place);
-          }}
-          className="flex items-center gap-1 rounded-lg bg-aqua-500/15 px-2.5 py-1.5 text-[11.5px] font-semibold text-aqua-300 ring-1 ring-inset ring-aqua-400/25 transition hover:bg-aqua-500/25 disabled:cursor-not-allowed disabled:opacity-35"
-        >
-          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
-            <path fill="currentColor" d="m21.4 11.6-9-9a2 2 0 0 0-2.8 0l-9 9a2 2 0 0 0 0 2.8l9 9a2 2 0 0 0 2.8 0l9-9a2 2 0 0 0 0-2.8ZM14 14.5V12h-4v3H8v-4a1 1 0 0 1 1-1h5V7.5l3.5 3.5Z" />
-          </svg>
-          Directions
-        </button>
-
         <button
           type="button"
           disabled={downloading}
@@ -202,11 +175,6 @@ export default function PlaceCard({
         </button>
 
         <div className="ml-auto flex items-center gap-0.5">
-          <IconLink href={place.googleMapsUrl} label="Open in Google Maps">
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
-              <path fill="currentColor" d="M12 2a7 7 0 0 0-7 7c0 4.6 5.4 11.4 6.3 12.5a.9.9 0 0 0 1.4 0C13.6 20.4 19 13.6 19 9a7 7 0 0 0-7-7Zm0 9.6A2.6 2.6 0 1 1 12 6.4a2.6 2.6 0 0 1 0 5.2Z" />
-            </svg>
-          </IconLink>
           {place.wikipediaUrl && (
             <IconLink href={place.wikipediaUrl} label="Wikipedia article">
               <span className="text-[12px] font-bold leading-none">W</span>

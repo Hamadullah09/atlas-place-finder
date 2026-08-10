@@ -11,12 +11,9 @@ interface ResultsPanelProps {
   loading: boolean;
   error: string | null;
   selectedId: string | null;
-  hasUserLocation: boolean;
-  googleEnabled: boolean;
   downloadingAll: boolean;
   downloadingPlaceId: string | null;
   onSelect: (place: Place) => void;
-  onDirections: (place: Place) => void;
   onDownloadPlace: (place: Place) => void;
   onDownloadAll: () => void;
 }
@@ -26,12 +23,9 @@ export default function ResultsPanel({
   loading,
   error,
   selectedId,
-  hasUserLocation,
-  googleEnabled,
   downloadingAll,
   downloadingPlaceId,
   onSelect,
-  onDirections,
   onDownloadPlace,
   onDownloadAll,
 }: ResultsPanelProps) {
@@ -183,12 +177,9 @@ export default function ResultsPanel({
               place={place}
               index={index}
               selected={selectedId === place.id}
-              hasUserLocation={hasUserLocation}
               city={result.area.city}
-              googleEnabled={googleEnabled}
               downloading={downloadingPlaceId === place.id}
               onSelect={onSelect}
-              onDirections={onDirections}
               onDownload={onDownloadPlace}
             />
           ))}
@@ -229,9 +220,7 @@ function EmptyState() {
         Search anywhere on earth
       </h2>
       <p className="mt-1.5 max-w-[280px] text-[12.5px] leading-relaxed text-mist-500">
-        Try <span className="font-medium text-mist-300">tourist places</span> in{' '}
-        <span className="font-medium text-mist-300">Karachi, Pakistan</span>. Results come from
-        OpenStreetMap, illustrated with ultra-HD Wikimedia photos, and export as PDFs and JPEGs.
+        Search for places anywhere on earth. Results come from OpenStreetMap and are exported with rich image and PDF support.
       </p>
     </div>
   );

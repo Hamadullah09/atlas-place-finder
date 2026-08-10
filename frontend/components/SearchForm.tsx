@@ -1,13 +1,15 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
-import { fetchCategories } from '@/lib/api';
+import { useEffect, useId, useState } from 'react';
+import { browseFolder, fetchCategories } from '@/lib/api';
 import type { CategorySuggestion, SearchQuery } from '@/lib/types';
 
 export interface SearchFormValues extends SearchQuery {
   limit: number;
   useLlm: boolean;
   includeImages: boolean;
+  downloadPath: string;
+  extraSources: string;
 }
 
 interface SearchFormProps {
@@ -17,48 +19,18 @@ interface SearchFormProps {
   onCancel: () => void;
 }
 
-const QUICK_PICKS = [
-  { label: 'Tourist places', value: 'tourist places', icon: '🏛' },
-  { label: 'Historical', value: 'historical sites', icon: '🏺' },
-  { label: 'Universities', value: 'universities', icon: '🎓' },
-  { label: 'Hospitals', value: 'hospitals', icon: '🏥' },
-  { label: 'Cafes', value: 'cafes', icon: '☕' },
-  { label: 'Hotels', value: 'hotels', icon: '🛎' },
-  { label: 'Companies', value: 'companies', icon: '🏢' },
-  { label: 'Museums', value: 'museums', icon: '🖼' },
-];
-
 export default function SearchForm({ initialValues, loading, onSearch, onCancel }: SearchFormProps) {
   const [values, setValues] = useState<SearchFormValues>(initialValues);
   const [categories, setCategories] = useState<CategorySuggestion[]>([]);
-  const [showOptions, setShowOptions] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
+  const [hintVisible, setHintVisible] = useState(false);
   const listId = useId();
-  const optionsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const controller = new AbortController();
     void fetchCategories(controller.signal).then(setCategories);
     return () => controller.abort();
   }, []);
-
-  // Dismiss the options popover on outside click / Escape.
-  useEffect(() => {
-    if (!showOptions) return undefined;
-
-    function onPointerDown(event: MouseEvent) {
-      if (!optionsRef.current?.contains(event.target as Node)) setShowOptions(false);
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setShowOptions(false);
-    }
-
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [showOptions]);
 
   function update<K extends keyof SearchFormValues>(key: K, value: SearchFormValues[K]): void {
     setValues((previous) => ({ ...previous, [key]: value }));
@@ -84,7 +56,7 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
             id="keyword"
             list={listId}
             className={inputClass}
-            placeholder="tourist places"
+            placeholder=""
             value={values.keyword}
             autoComplete="off"
             onChange={(event) => update('keyword', event.target.value)}
@@ -104,7 +76,7 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
           <input
             id="city"
             className={inputClass}
-            placeholder="Karachi"
+            placeholder=""
             value={values.city}
             autoComplete="address-level2"
             onChange={(event) => update('city', event.target.value)}
@@ -117,7 +89,7 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
           <input
             id="country"
             className={inputClass}
-            placeholder="Pakistan"
+            placeholder=""
             value={values.country}
             autoComplete="country-name"
             onChange={(event) => update('country', event.target.value)}
@@ -157,87 +129,58 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
         </div>
       </div>
 
-      {/* Quick picks + options */}
-      <div className="mt-2.5 flex items-center gap-1.5 overflow-x-auto pb-0.5 scroll-region">
-        {QUICK_PICKS.map((pick) => {
-          const active = values.keyword.toLowerCase() === pick.value;
-          return (
+      <div className="mt-3 space-y-3 rounded-2xl border border-white/[0.07] bg-ink-900/60 p-3">
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mist-500">
+            Download path
+          </span>
+          <div className="mt-1 flex gap-1.5">
+            <input
+              type="text"
+              className="flex-1 rounded-xl border border-white/[0.07] bg-ink-950/80 px-3 py-2 text-sm font-medium text-mist-100 outline-none focus:border-aqua-400 focus:ring-2 focus:ring-aqua-400/20"
+              placeholder="C:\\Users\\you\\Downloads\\Places"
+              value={values.downloadPath}
+              onChange={(event) => update('downloadPath', event.target.value)}
+            />
             <button
-              key={pick.value}
               type="button"
-              onClick={() => update('keyword', pick.value)}
-              className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition ${
-                active
-                  ? 'border-aqua-500/40 bg-aqua-500/15 text-aqua-300'
-                  : 'border-white/[0.07] text-mist-400 hover:border-white/15 hover:text-mist-200'
-              }`}
+              onClick={async () => {
+                setBrowsing(true);
+                setHintVisible(false);
+                try {
+                  const folder = await browseFolder();
+                  if (folder) update('downloadPath', folder);
+                } catch {
+                  // ignore; the field can still be typed manually.
+                } finally {
+                  setBrowsing(false);
+                }
+              }}
+              disabled={browsing}
+              className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 text-[12px] font-semibold text-mist-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <span aria-hidden className="text-[12px] leading-none">
-                {pick.icon}
-              </span>
-              {pick.label}
+              {browsing ? 'Choosing…' : 'Browse…'}
             </button>
-          );
-        })}
-
-        <div className="relative ml-auto shrink-0 pl-2" ref={optionsRef}>
-          <button
-            type="button"
-            onClick={() => setShowOptions((open) => !open)}
-            aria-expanded={showOptions}
-            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.5px] font-medium transition ${
-              showOptions
-                ? 'border-white/20 bg-white/[0.07] text-mist-100'
-                : 'border-white/[0.07] text-mist-400 hover:border-white/15 hover:text-mist-200'
-            }`}
-          >
-            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
-              <path
-                fill="currentColor"
-                d="M3 6h11a3 3 0 0 1 6 0h1v2h-1a3 3 0 0 1-6 0H3V6Zm0 10h5a3 3 0 0 1 6 0h7v2h-7a3 3 0 0 1-6 0H3v-2Z"
-              />
-            </svg>
-            Options
-          </button>
-
-          {showOptions && (
-            <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-2xl p-3.5 shadow-2xl shadow-black/60 glass-strong animate-rise">
-              <label className="block">
-                <span className="flex items-baseline justify-between text-[11px] font-medium text-mist-400">
-                  Max results
-                  <span className="text-sm font-semibold tabular-nums text-mist-50">
-                    {values.limit}
-                  </span>
-                </span>
-                <input
-                  type="range"
-                  min={5}
-                  max={60}
-                  step={5}
-                  value={values.limit}
-                  onChange={(event) => update('limit', Number(event.target.value))}
-                  className="mt-1.5 w-full accent-aqua-400"
-                />
-              </label>
-
-              <div className="mt-3 space-y-2.5 border-t border-white/[0.07] pt-3">
-                <Switch
-                  label="Clean results with the LLM"
-                  hint="Falls back to rule-based cleaning without a key."
-                  checked={values.useLlm}
-                  onChange={(checked) => update('useLlm', checked)}
-                />
-                <Switch
-                  label="Fetch ultra-HD images"
-                  hint="Wikidata → Wikipedia → Commons → Unsplash."
-                  checked={values.includeImages}
-                  onChange={(checked) => update('includeImages', checked)}
-                />
-              </div>
-            </div>
+          </div>
+          {hintVisible && (
+            <span className="mt-1 block text-[10.5px] leading-snug text-aqua-300">
+              A folder browser window is open. It may appear behind your browser.
+            </span>
           )}
-        </div>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mist-500">
+            Additional links
+          </span>
+          <textarea
+            className="w-full min-h-[72px] rounded-xl border border-white/[0.07] bg-ink-950/80 px-3 py-2 text-sm font-medium text-mist-100 outline-none resize-y focus:border-aqua-400 focus:ring-2 focus:ring-aqua-400/20"
+            placeholder="https://example.com/article, https://another.example.com"
+            value={values.extraSources}
+            onChange={(event) => update('extraSources', event.target.value)}
+          />
+        </label>
       </div>
+
     </form>
   );
 }

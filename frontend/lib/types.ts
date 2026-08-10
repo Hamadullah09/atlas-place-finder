@@ -49,7 +49,6 @@ export interface Place {
   llmProcessed: boolean;
   wikipediaUrl?: string;
   wikidataUrl?: string;
-  googleMapsUrl: string;
   osmUrl: string;
 }
 
@@ -87,6 +86,8 @@ export interface SearchQuery {
   limit?: number;
   useLlm?: boolean;
   includeImages?: boolean;
+  downloadPath?: string;
+  extraSources?: string | string[];
   /** Which engine answers the search: open-source stack (default) or Google. */
   source?: PlaceEngine;
 }
@@ -114,6 +115,6 @@ export interface LatLng {
 export interface RouteSummary {
   distanceText: string;
   durationText: string;
-  travelMode: google.maps.TravelMode;
+  travelMode: 'DRIVING' | 'WALKING' | 'BICYCLING' | 'TRANSIT';
   destinationName: string;
 }
