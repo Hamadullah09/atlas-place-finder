@@ -101,28 +101,52 @@ Batch runs are built to survive being interrupted:
 
 ## Configuration
 
-### Open-source LLM (optional, recommended)
+### Local models (optional, recommended)
 
-Used to clean results, write the PDF articles, and translate non-English place names.
-Any OpenAI-compatible endpoint works. With [Ollama](https://ollama.com):
+Used to filter results, write the PDF articles, translate non-Latin place names, and
+merge records that name one place two ways. Install [Ollama](https://ollama.com) and:
 
 ```bash
-ollama pull qwen2.5:1.5b
+ollama pull qwen3:4b
+ollama pull bge-m3
 ```
 
-```ini
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
-LLM_MODEL=qwen2.5:1.5b
-LLM_BATCH_SIZE=4
-LLM_TIMEOUT_MS=180000
+**That is the whole setup** — both are detected at startup and used automatically.
+The console prints which it picked. Everything runs on CPU; no key, no GPU, no cost.
+
+| Model | Job |
+| --- | --- |
+| `qwen3:4b` | Filtering, English write-ups, translating CJK/Arabic/Cyrillic names |
+| `bge-m3` | Embeddings — merges near-duplicate names, multilingual |
+
+Without them the app still runs end to end; PDFs use text assembled directly from the
+sources. Any OpenAI-compatible endpoint can be used instead via `LLM_BASE_URL` /
+`LLM_API_KEY` / `LLM_MODEL`.
+
+`qwen3:4b` is the recommended floor. Smaller models leave a share of non-Latin names
+untranslated and produce noticeably thinner articles — measure it yourself with the
+harness below. It is a reasoning model that emits `<think>` blocks; the parser strips
+them.
+
+### Measuring prompt and schema changes
+
+Prompts are evaluated against a fixed corpus of real records rather than by eye:
+
+```bash
+npm run eval:harvest -- --target 800    # one-off: capture real places to JSONL
+npm run eval -- --limit 500             # score every LLM stage
 ```
 
-`LLM_TIMEOUT_MS` matters: the 60 s default is often too short for a small model on
-CPU. Without an LLM the app still runs end to end — PDFs fall back to text assembled
-directly from the sources.
+The corpus is captured *before* any model touches it, so a prompt change can be
+compared against byte-identical input as often as needed without re-hitting Overpass.
+It is weighted towards Chinese, Arabic, Cyrillic and Indic cities, because that is
+where translation and rendering actually break.
 
-A larger model (`llama3.1:8b`) gives noticeably better articles and translations.
+Scoring is deterministic — no rubric model, no subjective grading. It counts things
+that are objectively wrong: residual source script in a translated name, the original
+echoed beside its translation, name collisions, write-up JSON that fails to parse,
+empty sections, and opening-hours claims with no supporting tag. Run one stage at a
+time with `--stage translate|filter|writeup|dedupe`, and `--report FILE` to save.
 
 ### Google Maps
 

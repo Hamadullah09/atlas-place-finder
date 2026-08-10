@@ -11,7 +11,9 @@
     "build": "tsc -p tsconfig.json",
     "prod": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test src/**/*.test.mjs"
+    "test": "node --import tsx --test src/**/*.test.mjs",
+    "eval:harvest": "tsx src/eval/harvest.ts",
+    "eval": "tsx src/eval/run.ts"
   },
   "dependencies": {
     "archiver": "^7.0.1",

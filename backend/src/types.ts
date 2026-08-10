@@ -56,6 +56,8 @@ export interface PlaceWriteup {
   overview: string;
   history?: string;
   architecture?: string;
+  /** Cultural, civic or regional significance. */
+  context?: string;
   highlights: string[];
   visiting?: string;
   practical?: string;

@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import { chunk, mapLimit } from '../lib/concurrency.js';
 import { stripUnsupportedHoursClaims } from '../lib/factCheck.js';
 import { fetchJson } from '../lib/http.js';
+import { cleanCompletion } from '../lib/llmText.js';
 import { cleanText } from '../lib/sanitize.js';
 import type { PlaceContact, RawPlace } from '../types.js';
 
@@ -207,7 +208,9 @@ function compactPlace(place: RawPlace, index: number): Record<string, unknown> {
  * schema afterwards, so a lenient reader costs nothing in safety.
  */
 function parseJsonArray(raw: string): unknown[] | null {
-  const withoutFences = raw.replace(/```(?:json)?/gi, '').trim();
+  // Reasoning models emit <think>…</think> before the answer; brackets inside
+  // it would otherwise be mistaken for the record array.
+  const withoutFences = cleanCompletion(raw);
 
   const arrayStart = withoutFences.indexOf('[');
   const arrayEnd = withoutFences.lastIndexOf(']');

@@ -10,6 +10,7 @@ import { runGoogleSearch } from './googleSearch.js';
 import { fetchImagesForPlaces, isCommonsUnreachable } from './images.js';
 import { enrichPlaces } from './llm.js';
 import { dedupePlaces, informationScore, searchOverpass } from './overpass.js';
+import { semanticDedupe } from './semanticDedupe.js';
 import { applyEnglishNames } from './translate.js';
 import type { Place, PlaceImage, RawPlace, SearchQuery, SearchResult } from '../types.js';
 
@@ -118,11 +119,21 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   const naming = await applyEnglishNames(candidates).catch(() => ({ translated: 0, note: undefined }));
   if (naming.note) warnings.push(naming.note);
 
-  const enrichment = await enrichPlaces(candidates, { keyword, city: area.city, country: area.country, useLlm });
+  // Translation can make two differently-spelled originals collide on one
+  // English name, so collapse again now that the final names are known.
+  const exact = naming.translated > 0 ? dedupePlaces(candidates) : candidates;
+
+  // Then the semantic pass, which catches what string equality cannot:
+  // transposed characters, translated-vs-transliterated pairs, added articles.
+  const semantic = await semanticDedupe(exact).catch(() => ({ places: exact, merged: 0, note: undefined }));
+  if (semantic.note) warnings.push(semantic.note);
+  const named = semantic.places;
+
+  const enrichment = await enrichPlaces(named, { keyword, city: area.city, country: area.country, useLlm });
   warnings.push(...enrichment.warnings);
 
   const enrichedById = new Map(enrichment.places.map((entry) => [entry.placeId, entry]));
-  const kept = candidates
+  const kept = named
     .filter((place) => enrichedById.get(place.id)?.keep !== false)
     .sort((a, b) => (enrichedById.get(b.id)?.qualityScore ?? 0) - (enrichedById.get(a.id)?.qualityScore ?? 0))
     .slice(0, limit);

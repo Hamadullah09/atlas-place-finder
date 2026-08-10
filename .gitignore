@@ -30,5 +30,13 @@ pkg-stage/
 _batch-state.json
 _batch-report.txt
 
+# Local embedding vector cache — regenerated on demand, machine-specific.
+.embed-cache.json
+
+# Eval output: timings and counts are specific to the machine and model that
+# produced them. The harness and its fixture corpus ARE tracked, so anyone can
+# regenerate these with `npm run eval`.
+backend/src/eval/reports/
+
 # Local agent/editor config
 .claude/

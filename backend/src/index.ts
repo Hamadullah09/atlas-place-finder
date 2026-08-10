@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import { config, isPackaged } from './config.js';
+import { autodetectOllama, config, isPackaged } from './config.js';
 import { setPublicBaseUrl } from './services/googleSearch.js';
 import { batchRouter } from './routes/batch.js';
 import { downloadRouter } from './routes/download.js';
@@ -146,6 +146,12 @@ function tryListen(port: number): Promise<Server | null> {
 const PORT_ATTEMPTS = 10;
 
 async function start(): Promise<void> {
+  // A local Ollama is the common setup and users should not have to wire it up
+  // by hand; without this the app quietly produces one-line PDFs on a machine
+  // that has a usable model sitting right there.
+  const detected = await autodetectOllama();
+  if (detected) console.log(`[place-finder] detected Ollama — using model "${detected}"`);
+
   // Double-clicking the exe twice should focus the running app, not crash.
   if (isPackaged && (await isPlaceFinderRunning(config.port))) {
     console.log(`[place-finder] already running at http://localhost:${config.port} — opening it`);
@@ -178,8 +184,10 @@ async function start(): Promise<void> {
   console.log(`[place-finder] engines: ${config.placeSource}`);
   console.log(
     config.llm.enabled
-      ? `[place-finder] LLM filtering: ${config.llm.model} via ${config.llm.baseUrl}`
-      : '[place-finder] LLM filtering: disabled (no LLM_API_KEY) — using the rule-based cleaner',
+      ? `[place-finder] LLM: ${config.llm.model} via ${config.llm.baseUrl}`
+      : '[place-finder] LLM: none found. Install Ollama (https://ollama.com) and run\n'
+        + '                  "ollama pull qwen2.5:1.5b" for AI-written PDF articles,\n'
+        + '                  or set LLM_* in the .env file. Exports still work without it.',
   );
 
   openBrowser(port);

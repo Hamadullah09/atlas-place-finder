@@ -57,6 +57,68 @@ function list(value: string | undefined, fallback: string[]): string[] {
 const SAFE_DEFAULT_USER_AGENT = 'PlaceFinder/1.0 (self-hosted; set HTTP_USER_AGENT to your contact URL)';
 
 /**
+ * Filled in at startup by `autodetectOllama()` when the operator left the
+ * LLM_* settings blank but is running Ollama locally. Without this the
+ * packaged app silently falls back to one-line PDFs on a machine that has a
+ * perfectly good model installed.
+ */
+let detectedLlm: { baseUrl: string; model: string } | null = null;
+
+/**
+ * Best first. Qwen3 4B leads: it is the smallest model measured to hold the
+ * write-up JSON schema and translate CJK place names reliably, while still
+ * running on a CPU-only machine. Larger models win if the operator has them.
+ */
+const MODEL_PREFERENCE = [
+  /^qwen3:(8|14|30|32)b/i,
+  /^llama3\.[13]:(8|70)b/i,
+  /^qwen3:4b/i,
+  /^qwen2\.5:(7|14|32)b/i,
+  /^qwen3/i,
+  /^mistral/i,
+  /^gemma[23]?:(9|12|27)b/i,
+  /^llama3/i,
+  /^qwen2\.5/i,
+];
+
+/** Embedding models, best first. BGE-M3 is multilingual and CPU-friendly. */
+const EMBED_PREFERENCE = [/^bge-m3/i, /^mxbai-embed/i, /^nomic-embed/i, /^all-minilm/i];
+
+let detectedEmbedModel: string | null = null;
+
+export async function autodetectOllama(): Promise<string | null> {
+  // An explicit key always wins; never override what the operator configured.
+  if (str(process.env.LLM_API_KEY, '').length > 0) return null;
+
+  const host = str(process.env.OLLAMA_HOST, 'http://localhost:11434').replace(/\/+$/, '');
+  try {
+    const response = await fetch(`${host}/api/tags`, { signal: AbortSignal.timeout(2_500) });
+    if (!response.ok) return null;
+
+    const payload = (await response.json()) as { models?: Array<{ name?: string }> };
+    const names = (payload.models ?? [])
+      .map((entry) => entry.name)
+      .filter((name): name is string => Boolean(name));
+    if (names.length === 0) return null;
+
+    // Embedding models cannot answer chat requests — never pick one as the LLM.
+    const chatNames = names.filter((name) => !EMBED_PREFERENCE.some((p) => p.test(name)));
+
+    const model = MODEL_PREFERENCE.map((pattern) => chatNames.find((name) => pattern.test(name)))
+      .find(Boolean) ?? chatNames[0];
+    if (!model) return null;
+
+    detectedEmbedModel = EMBED_PREFERENCE.map((pattern) => names.find((name) => pattern.test(name)))
+      .find(Boolean) ?? null;
+
+    detectedLlm = { baseUrl: `${host}/v1`, model };
+    return model;
+  } catch {
+    return null; // Ollama not installed or not running — stay disabled.
+  }
+}
+
+/**
  * Nominatim hard-blocks (HTTP 403) any User-Agent containing a placeholder
  * domain such as example.com — a copy-pasted `.env` would otherwise fail every
  * geocode with a confusing "city not found". Catch it here instead.
@@ -180,13 +242,27 @@ export const config = {
   },
 
   llm: {
-    baseUrl: str(process.env.LLM_BASE_URL, 'https://router.huggingface.co/v1').replace(/\/+$/, ''),
-    apiKey: str(process.env.LLM_API_KEY, ''),
-    model: str(process.env.LLM_MODEL, 'meta-llama/Llama-3.3-70B-Instruct'),
-    batchSize: num(process.env.LLM_BATCH_SIZE, 8),
-    timeoutMs: num(process.env.LLM_TIMEOUT_MS, 60_000),
+    get baseUrl(): string {
+      return str(process.env.LLM_BASE_URL, detectedLlm?.baseUrl ?? 'https://router.huggingface.co/v1')
+        .replace(/\/+$/, '');
+    },
+    get apiKey(): string {
+      return str(process.env.LLM_API_KEY, detectedLlm ? 'ollama' : '');
+    },
+    get model(): string {
+      return str(process.env.LLM_MODEL, detectedLlm?.model ?? 'meta-llama/Llama-3.3-70B-Instruct');
+    },
+    /** Small by default: a big batch against a local CPU model times out and
+     *  costs every place in it. */
+    batchSize: num(process.env.LLM_BATCH_SIZE, 5),
+    /** Local CPU models are slow; the packaged app cannot assume a fast host. */
+    timeoutMs: num(process.env.LLM_TIMEOUT_MS, 180_000),
     get enabled(): boolean {
-      return str(process.env.LLM_API_KEY, '').length > 0;
+      return str(process.env.LLM_API_KEY, '').length > 0 || detectedLlm !== null;
+    },
+    /** True when the LLM came from auto-detection rather than the .env file. */
+    get autodetected(): boolean {
+      return detectedLlm !== null && str(process.env.LLM_API_KEY, '').length === 0;
     },
     /**
      * Long-form PDF write-ups. Generated at DOWNLOAD time, not search time —
@@ -196,10 +272,35 @@ export const config = {
     longform: {
       enabled: bool(process.env.LLM_LONGFORM, true),
       timeoutMs: num(process.env.LLM_LONGFORM_TIMEOUT_MS, 240_000),
-      maxTokens: num(process.env.LLM_LONGFORM_MAX_TOKENS, 1800),
+      maxTokens: num(process.env.LLM_LONGFORM_MAX_TOKENS, 3000),
       /** Places written up in parallel. Keep low for local models. */
       concurrency: num(process.env.LLM_LONGFORM_CONCURRENCY, 2),
     },
+  },
+
+  /**
+   * Local embeddings, used to recognise that two records describe the same
+   * place when the strings differ — transposed characters, a Chinese name
+   * beside its English translation, punctuation variants. Exact matching
+   * cannot see any of those.
+   */
+  embeddings: {
+    get model(): string {
+      return str(process.env.EMBED_MODEL, detectedEmbedModel ?? '');
+    },
+    get baseUrl(): string {
+      // Ollama's native embed endpoint lives beside the OpenAI-compatible one.
+      const configured = str(process.env.EMBED_BASE_URL, '');
+      if (configured) return configured.replace(/\/+$/, '');
+      return str(process.env.OLLAMA_HOST, 'http://localhost:11434').replace(/\/+$/, '');
+    },
+    get enabled(): boolean {
+      return bool(process.env.EMBED_ENABLED, true) && this.model.length > 0;
+    },
+    /** Cosine similarity above which two place names are treated as one place. */
+    duplicateThreshold: Number(process.env.EMBED_DUPLICATE_THRESHOLD ?? 0.92),
+    timeoutMs: num(process.env.EMBED_TIMEOUT_MS, 60_000),
+    batchSize: num(process.env.EMBED_BATCH_SIZE, 16),
   },
 
   databaseUrl: str(process.env.DATABASE_URL, ''),

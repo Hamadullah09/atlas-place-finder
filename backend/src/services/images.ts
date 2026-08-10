@@ -624,15 +624,22 @@ export async function fetchImagesForPlaces(
       );
     }
 
+    // Commons indexes Chinese sites under their Chinese names, so a place whose
+    // name we translated to English must also be searched under its original.
+    const localName = place.tags['name:local'];
+    const searchNames = [...new Set([place.name, localName].filter(Boolean))] as string[];
+
     // 5. Commons free-text search.
-    if (short() && allowTextSearch) {
-      const query = `${place.name} ${options.city}`.trim();
+    for (const term of searchNames) {
+      if (!short() || !allowTextSearch) break;
+      const query = `${term} ${options.city}`.trim();
       collected.push(...(await commonsSearch(query, perPlace - collected.length)));
     }
 
     // 6. Openverse — no key needed, CC-licensed.
-    if (short() && allowTextSearch) {
-      const query = `${place.name} ${options.city}`.trim();
+    for (const term of searchNames) {
+      if (!short() || !allowTextSearch) break;
+      const query = `${term} ${options.city}`.trim();
       collected.push(...(await openverseSearch(query, perPlace - collected.length)));
     }
 

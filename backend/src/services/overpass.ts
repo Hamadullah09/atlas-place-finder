@@ -148,15 +148,51 @@ export function informationScore(place: RawPlace): number {
 }
 
 /**
- * OSM frequently holds the same real-world place as a node *and* a building
- * way. Collapse entries that share a name and sit within 250 m, keeping the
- * richer record.
+ * Values that mark a place as one branch of something, where two entries
+ * sharing a name really are two different places a user can visit.
+ */
+const CHAIN_VALUES = new Set([
+  'cafe', 'restaurant', 'fast_food', 'bar', 'pub', 'ice_cream', 'bakery',
+  'bank', 'atm', 'pharmacy', 'fuel', 'convenience', 'supermarket',
+  'clothes', 'hairdresser', 'car_repair', 'hotel', 'motel', 'guest_house',
+  'clinic', 'doctors', 'dentist', 'kindergarten', 'post_office', 'toilets',
+  'parking', 'bus_station', 'bicycle_parking',
+]);
+
+/**
+ * True when repeated names are expected — chains and utilities. Everything
+ * else (a wall, a park, a temple, a museum) is treated as a single landmark
+ * that OSM may simply have split into pieces.
+ */
+function isChainLike(place: RawPlace): boolean {
+  const tags = place.tags;
+  if (tags.brand || tags['brand:wikidata'] || tags.operator) return true;
+  for (const key of ['shop', 'amenity', 'tourism', 'healthcare', 'office']) {
+    const value = tags[key];
+    if (value && CHAIN_VALUES.has(value)) return true;
+  }
+  return false;
+}
+
+/**
+ * OSM holds one real-world place in several ways: as a node *and* a building
+ * way, and — for anything long or large — as dozens of separate segments that
+ * all carry the same name. A search of Baoding returned the Great Wall of
+ * China twenty-five times for exactly that reason.
+ *
+ * So: entries sharing a name collapse into the richest single record. Distance
+ * is only consulted for chain-like places (two branches of the same cafe are
+ * genuinely two places); for landmarks, a shared name anywhere in the search
+ * area means one destination. `segments` records how many pieces were folded
+ * together so the export can say so.
  */
 export function dedupePlaces(places: RawPlace[]): RawPlace[] {
   const byName = new Map<string, RawPlace[]>();
 
   for (const place of places) {
-    const key = place.name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    // Normalising to letters/digits also folds "Great Wall (Jinshanling)"-style
+    // punctuation variants onto the same key.
+    const key = place.name.toLowerCase().replace(/[^a-z0-9㐀-鿿]+/g, '');
     const bucket = byName.get(key);
     if (bucket) bucket.push(place);
     else byName.set(key, [place]);
@@ -165,19 +201,35 @@ export function dedupePlaces(places: RawPlace[]): RawPlace[] {
   const output: RawPlace[] = [];
   for (const bucket of byName.values()) {
     const kept: RawPlace[] = [];
+    const mergedInto = new Map<number, number>();
+
     for (const candidate of bucket) {
-      const nearIndex = kept.findIndex((existing) => distanceMeters(existing, candidate) < 250);
-      if (nearIndex === -1) {
+      const chain = isChainLike(candidate);
+      const matchIndex = kept.findIndex((existing) => (
+        chain || isChainLike(existing)
+          ? distanceMeters(existing, candidate) < 250
+          : true // same-named landmark: one place, however far the pieces sit
+      ));
+
+      if (matchIndex === -1) {
         kept.push(candidate);
         continue;
       }
-      const existing = kept[nearIndex]!;
+
+      mergedInto.set(matchIndex, (mergedInto.get(matchIndex) ?? 1) + 1);
+      const existing = kept[matchIndex]!;
       if (informationScore(candidate) > informationScore(existing)) {
-        kept[nearIndex] = { ...candidate, tags: { ...existing.tags, ...candidate.tags } };
+        kept[matchIndex] = { ...candidate, tags: { ...existing.tags, ...candidate.tags } };
       } else {
-        kept[nearIndex] = { ...existing, tags: { ...candidate.tags, ...existing.tags } };
+        kept[matchIndex] = { ...existing, tags: { ...candidate.tags, ...existing.tags } };
       }
     }
+
+    kept.forEach((place, index) => {
+      const count = mergedInto.get(index);
+      if (count && count > 1) place.tags['x:segments'] = String(count);
+    });
+
     output.push(...kept);
   }
 

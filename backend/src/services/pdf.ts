@@ -398,6 +398,7 @@ export async function renderPlacePdf(
 
     section('History', writeup.history);
     section('Architecture & design', writeup.architecture);
+    section('Significance', writeup.context);
 
     const highlights = writeup.highlights
       .map((item) => repairSummary(item, place.name, displayName))

@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { chunk, mapLimitSettled } from '../lib/concurrency.js';
 import { fetchJson, qs } from '../lib/http.js';
-import { cleanText } from '../lib/sanitize.js';
+import { cleanText, isMostlyNonLatin } from '../lib/sanitize.js';
 import type { Place, PlaceContent, WikidataFact } from '../types.js';
 
 const WIKIDATA_API = 'https://www.wikidata.org/w/api.php';
@@ -194,6 +194,93 @@ function parseWikipediaTag(tag: string | undefined): { lang: string; title: stri
 }
 
 /**
+ * Wikipedia language edition most likely to document a place, derived from the
+ * country in its address tags. Only the languages this tool actually meets in
+ * bulk are listed; everything else falls back to English.
+ */
+const LANG_BY_COUNTRY: Record<string, string> = {
+  cn: 'zh', tw: 'zh', hk: 'zh', jp: 'ja', kr: 'ko', ru: 'ru', ua: 'uk',
+  sa: 'ar', ae: 'ar', eg: 'ar', ir: 'fa', pk: 'ur', in: 'hi', th: 'th',
+  vn: 'vi', gr: 'el', il: 'he', tr: 'tr', de: 'de', fr: 'fr', es: 'es',
+  it: 'it', pt: 'pt', br: 'pt', pl: 'pl', nl: 'nl',
+};
+
+function languageForCountry(place: Place): string | undefined {
+  const code = (place.tags['addr:country'] ?? '').trim().toLowerCase();
+  return LANG_BY_COUNTRY[code];
+}
+
+function cityOf(place: Place): string {
+  return place.tags['addr:city'] ?? place.tags['addr:district'] ?? '';
+}
+
+/** Letters/digits only, for comparing an article title against a place name. */
+function comparable(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9㐀-鿿]+/g, '');
+}
+
+/**
+ * Guards a searched article against being about something else entirely.
+ * "Bell Tower" in Baoding must not pick up the Xi'an Bell Tower article, so a
+ * hit counts only when the names genuinely correspond.
+ */
+function titleMatchesPlace(title: string, placeName: string): boolean {
+  const a = comparable(title);
+  const b = comparable(placeName);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // Allow "X (disambiguator)" and "X Museum" vs "X", but nothing looser.
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length >= b.length ? b : a;
+  return shorter.length >= 6 && longer.startsWith(shorter);
+}
+
+interface WikiSearchResult {
+  title: string;
+  snippet?: string;
+}
+
+/**
+ * Finds an article for a place that carries no wikipedia/wikidata tag — the
+ * common case for parks, temples and local sites, which otherwise reach the
+ * PDF with nothing but their coordinates. Searched on the local-language wiki
+ * first (a Chinese park is documented on zh.wikipedia, not en), then English.
+ */
+async function searchWikipedia(
+  host: string,
+  placeName: string,
+  city: string,
+): Promise<{ title: string; extract: string } | null> {
+  const url = `https://${host}/w/api.php?${qs({
+    action: 'query',
+    format: 'json',
+    formatversion: 2,
+    list: 'search',
+    srsearch: `${placeName} ${city}`,
+    srlimit: 5,
+    srnamespace: 0,
+    origin: '*',
+  })}`;
+
+  try {
+    const payload = await fetchJson<{ query?: { search?: WikiSearchResult[] } }>(url, {
+      timeoutMs: 25_000,
+      retries: 1,
+    });
+
+    for (const hit of payload.query?.search ?? []) {
+      if (!titleMatchesPlace(hit.title, placeName)) continue;
+      const extract = await fetchExtract(host, hit.title);
+      if (extract && extract.length > 200) return { title: hit.title, extract };
+    }
+  } catch {
+    // Search is best-effort enrichment.
+  }
+
+  return null;
+}
+
+/**
  * Gathers long-form research for a batch of places.
  *
  * Called from the download pipeline rather than search: a full Wikipedia
@@ -260,6 +347,35 @@ export async function fetchContentForPlaces(places: Place[]): Promise<Map<string
       wikipediaExtract = await fetchExtract(wikiHost, wikiTitle);
       wikipediaUrl = `https://${wikiHost}/wiki/${encodeURIComponent(wikiTitle.replace(/ /g, '_'))}`;
       if (wikipediaExtract) sources.push({ label: `Wikipedia — ${wikiTitle}`, url: wikipediaUrl });
+    }
+
+    // Nothing linked: search for the article instead. Most parks, temples and
+    // local landmarks carry no wikipedia/wikidata tag at all, and without this
+    // they reach the PDF with nothing to write about.
+    if (!wikipediaExtract) {
+      const localLang = place.tags['name:local'] || isMostlyNonLatin(place.tags.name ?? '')
+        ? languageForCountry(place)
+        : undefined;
+      const hosts = [
+        ...(localLang ? [`${localLang}.wikipedia.org`] : []),
+        'en.wikipedia.org',
+      ];
+      // Search under the original name too — a translated name will not match
+      // a local-language article title.
+      const candidates = [place.name, place.tags['name:local'], place.tags.name]
+        .filter((value): value is string => Boolean(value));
+
+      outer: for (const host of hosts) {
+        for (const candidate of [...new Set(candidates)]) {
+          const found = await searchWikipedia(host, candidate, cityOf(place));
+          if (found) {
+            wikipediaExtract = found.extract;
+            wikipediaUrl = `https://${host}/wiki/${encodeURIComponent(found.title.replace(/ /g, '_'))}`;
+            sources.push({ label: `Wikipedia — ${found.title}`, url: wikipediaUrl });
+            break outer;
+          }
+        }
+      }
     }
 
     let wikivoyageExtract: string | undefined;

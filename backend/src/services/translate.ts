@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { chunk } from '../lib/concurrency.js';
 import { fetchJson, qs } from '../lib/http.js';
+import { cleanCompletion } from '../lib/llmText.js';
 import { cleanText, isMostlyNonLatin } from '../lib/sanitize.js';
 import type { RawPlace } from '../types.js';
 
@@ -61,6 +62,26 @@ interface ChatResponse {
 }
 
 /**
+ * Models often answer "原名 - English Name" instead of the translation alone.
+ * Keep only the Latin side; the original is already stored as `name:local`.
+ */
+function stripEchoedOriginal(value: string): string {
+  if (!/[㐀-鿿豈-﫿]/.test(value)) return value;
+
+  const parts = value
+    .split(/\s*[-–—:：|/(){}[\]]\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  // The longest fragment carrying no CJK is the English name.
+  const latin = parts
+    .filter((part) => !/[㐀-鿿豈-﫿]/.test(part))
+    .sort((a, b) => b.length - a.length)[0];
+
+  return latin && latin.length >= 3 ? latin : '';
+}
+
+/**
  * One batched call: the model returns `index. English name` lines. Kept
  * deliberately rigid — small local models handle a numbered list far more
  * reliably than nested JSON.
@@ -94,8 +115,10 @@ ${list}`;
   try {
     const response = await fetchJson<ChatResponse>(`${config.llm.baseUrl}/chat/completions`, {
       method: 'POST',
-      timeoutMs: config.llm.timeoutMs,
-      retries: 0,
+      // Translation is short output but a small CPU model still needs room, and
+      // a timeout here silently leaves place names unreadable — so allow a retry.
+      timeoutMs: Math.max(config.llm.timeoutMs, 120_000),
+      retries: 1,
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.llm.apiKey}`,
@@ -110,7 +133,9 @@ ${list}`;
       }),
     });
 
-    const raw = response.choices?.[0]?.message?.content ?? '';
+    // Qwen3 and friends answer with a <think> block first; its lines would be
+    // read as numbered translations.
+    const raw = cleanCompletion(response.choices?.[0]?.message?.content ?? '');
     const seen = new Map<string, number>();
 
     for (const line of raw.split('\n')) {
@@ -119,9 +144,9 @@ ${list}`;
       const index = Number(match[1]);
       if (!entries.some((entry) => entry.index === index)) continue;
 
-      const name = cleanText(match[2]!.replace(/^["'`]|["'`]$/g, ''), 160);
+      const name = stripEchoedOriginal(cleanText(match[2]!.replace(/^["'`]|["'`]$/g, ''), 160));
       // Reject echoes of the original and anything still unreadable.
-      if (!name || isMostlyNonLatin(name)) continue;
+      if (!name || isMostlyNonLatin(name) || /[㐀-鿿豈-﫿]/.test(name)) continue;
 
       // A repeated translation means the model copied one answer onto another
       // entry; drop both rather than mislabel a place.
@@ -176,8 +201,11 @@ export async function applyEnglishNames(places: RawPlace[]): Promise<{ translate
   }
 
   // --- LLM translation for the rest --------------------------------------
+  // Small batches on purpose: one 20-name request against a 1.5B CPU model
+  // exceeded the timeout and cost every name in it. Ten keeps each call short,
+  // and a failure now loses far less.
   if (stillNeeding.length > 0 && config.llm.enabled) {
-    for (const batch of chunk(stillNeeding, 20)) {
+    for (const batch of chunk(stillNeeding, 10)) {
       const entries = batch.map((place, offset) => ({
         index: offset + 1,
         name: place.name,
