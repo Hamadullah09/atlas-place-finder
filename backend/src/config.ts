@@ -272,7 +272,9 @@ export const config = {
     longform: {
       enabled: bool(process.env.LLM_LONGFORM, true),
       timeoutMs: num(process.env.LLM_LONGFORM_TIMEOUT_MS, 240_000),
-      maxTokens: num(process.env.LLM_LONGFORM_MAX_TOKENS, 3000),
+      /** Headroom matters: a truncated response fails to parse and the place
+       *  drops to raw source extracts instead of a written article. */
+      maxTokens: num(process.env.LLM_LONGFORM_MAX_TOKENS, 4000),
       /** Places written up in parallel. Keep low for local models. */
       concurrency: num(process.env.LLM_LONGFORM_CONCURRENCY, 2),
     },

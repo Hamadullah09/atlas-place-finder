@@ -396,7 +396,21 @@ export async function renderPlacePdf(
         || 'No English-language description is available for this location.',
     );
 
-    section('History', writeup.history);
+    // When the model produced nothing usable the remaining text is quoted
+    // source material, not an authored article. Say so rather than letting a
+    // raw encyclopedia dump sit under a heading that implies we wrote it.
+    if (!writeup.llmGenerated && writeup.history) {
+      writer.heading('Background (source extract)');
+      writer.paragraph(
+        'The following is quoted directly from the sources listed for this place; '
+          + 'no summary was generated for it.',
+        { size: 9, color: COLORS.muted },
+      );
+      writer.paragraph(repairSummary(writeup.history, place.name, displayName));
+    } else {
+      section('History', writeup.history);
+    }
+
     section('Architecture & design', writeup.architecture);
     section('Significance', writeup.context);
 

@@ -308,8 +308,21 @@ export function fallbackWriteup(place: Place, content: PlaceContent | undefined)
   };
 }
 
+/**
+ * Reasoning models (Qwen3, DeepSeek-R1) burn the token budget thinking before
+ * they answer, so a long article gets truncated mid-JSON, fails to parse and
+ * falls back to dumping raw source text into the PDF. Qwen3 honours the
+ * `/no_think` soft switch on any OpenAI-compatible endpoint; Ollama also
+ * accepts `think: false`. Both are sent — whichever the server understands
+ * wins, and an unknown field is ignored.
+ */
+function isReasoningModel(model: string): boolean {
+  return /qwen3|deepseek-r1|\br1\b|reason|thinking/i.test(model);
+}
+
 async function callLlm(place: Place, content: PlaceContent | undefined): Promise<PlaceWriteup | null> {
   const sourceBlock = buildSourceBlock(place, content);
+  const reasoning = isReasoningModel(config.llm.model);
 
   const response = await fetchJson<ChatCompletionResponse>(
     `${config.llm.baseUrl}/chat/completions`,
@@ -324,9 +337,17 @@ async function callLlm(place: Place, content: PlaceContent | undefined): Promise
       body: JSON.stringify({
         model: config.llm.model,
         temperature: 0.25,
+        // Thinking is disabled, but leave headroom: a truncated article is the
+        // single most common cause of a place getting no write-up at all.
         max_tokens: config.llm.longform.maxTokens,
+        ...(reasoning
+          ? { think: false, chat_template_kwargs: { enable_thinking: false } }
+          : {}),
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          {
+            role: 'system',
+            content: reasoning ? `${SYSTEM_PROMPT}\n\n/no_think` : SYSTEM_PROMPT,
+          },
           {
             role: 'user',
             content: `Write the entry for this place.\n\nSOURCE MATERIAL:\n${sourceBlock}`,
@@ -426,10 +447,17 @@ export async function generateWriteups(
     async (place) => {
       const content = contentByPlace.get(place.id);
       try {
-        const writeup = await callLlm(place, content);
+        // One retry: a single truncated or malformed response should not cost
+        // the place its whole article and drop it to raw source text.
+        let writeup = await callLlm(place, content);
+        if (!writeup) writeup = await callLlm(place, content).catch(() => null);
+
         writeups.set(place.id, writeup ?? fallbackWriteup(place, content));
         if (!writeup) {
-          notes.push(`${place.name}: the model returned no usable article; used the sourced fallback.`);
+          notes.push(
+            `${place.name}: the model returned no usable article twice; the PDF shows source extracts instead. `
+              + 'A larger model (qwen3:8b or above) fixes this.',
+          );
         } else if (writeup.redactions.length > 0) {
           notes.push(
             `${place.name}: removed ${writeup.redactions.length} unsupported opening-hours claim(s) from the write-up.`,
