@@ -14,17 +14,32 @@ export interface SearchFormValues extends SearchQuery {
 
 interface SearchFormProps {
   initialValues: SearchFormValues;
+  values?: SearchFormValues;
   loading: boolean;
   onSearch: (values: SearchFormValues) => void;
   onCancel: () => void;
 }
 
-export default function SearchForm({ initialValues, loading, onSearch, onCancel }: SearchFormProps) {
+/** One-click starting points, so the first search needs no typing. */
+const QUICK_PICKS = ['tourist places', 'museums', 'historical sites', 'parks', 'universities'];
+
+export default function SearchForm({
+  initialValues,
+  values: controlled,
+  loading,
+  onSearch,
+}: SearchFormProps) {
   const [values, setValues] = useState<SearchFormValues>(initialValues);
   const [categories, setCategories] = useState<CategorySuggestion[]>([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [hintVisible, setHintVisible] = useState(false);
   const listId = useId();
+
+  // Lets the parent fill the form (e.g. the "try an example" button).
+  useEffect(() => {
+    if (controlled) setValues(controlled);
+  }, [controlled]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -36,27 +51,26 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
     setValues((previous) => ({ ...previous, [key]: value }));
   }
 
-  const canSubmit =
-    values.keyword.trim().length >= 2
-    && values.city.trim().length > 0
-    && values.country.trim().length > 0;
+  const missing: string[] = [];
+  if (values.keyword.trim().length < 2) missing.push('what to look for');
+  if (!values.city.trim()) missing.push('a city');
+  if (!values.country.trim()) missing.push('a country');
+  const canSubmit = missing.length === 0;
 
   return (
     <form
-      className="relative"
+      className="space-y-3"
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit && !loading) onSearch(values);
       }}
     >
-      {/* Segmented search bar */}
-      <div className="group flex items-stretch overflow-hidden rounded-2xl border border-white/[0.09] bg-ink-850/80 shadow-xl shadow-black/40 transition focus-within:border-aqua-500/50 focus-within:shadow-aqua-500/10">
-        <Segment label="Looking for" grow>
+      <div className="space-y-2.5 rounded-2xl border border-white/[0.08] bg-ink-900/60 p-3.5">
+        <Field label="What are you looking for?" hint="A kind of place, not a specific one">
           <input
-            id="keyword"
             list={listId}
             className={inputClass}
-            placeholder=""
+            placeholder="museums"
             value={values.keyword}
             autoComplete="off"
             onChange={(event) => update('keyword', event.target.value)}
@@ -68,189 +82,179 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
               </option>
             ))}
           </datalist>
-        </Segment>
+        </Field>
 
-        <Divider />
-
-        <Segment label="City">
-          <input
-            id="city"
-            className={inputClass}
-            placeholder=""
-            value={values.city}
-            autoComplete="address-level2"
-            onChange={(event) => update('city', event.target.value)}
-          />
-        </Segment>
-
-        <Divider />
-
-        <Segment label="Country">
-          <input
-            id="country"
-            className={inputClass}
-            placeholder=""
-            value={values.country}
-            autoComplete="country-name"
-            onChange={(event) => update('country', event.target.value)}
-          />
-        </Segment>
-
-        <div className="flex items-center gap-1.5 p-1.5">
-          {loading ? (
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_PICKS.map((pick) => (
             <button
+              key={pick}
               type="button"
-              onClick={onCancel}
-              className="h-11 rounded-xl border border-white/10 px-4 text-sm font-semibold text-mist-200 transition hover:border-white/20 hover:bg-white/5"
+              onClick={() => update('keyword', pick)}
+              className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition ${
+                values.keyword.toLowerCase() === pick
+                  ? 'border-aqua-500/40 bg-aqua-500/15 text-aqua-300'
+                  : 'border-white/[0.07] text-mist-400 hover:border-white/15 hover:text-mist-200'
+              }`}
             >
-              Stop
+              {pick}
             </button>
-          ) : null}
-          <button
-            type="submit"
-            disabled={!canSubmit || loading}
-            aria-label="Search"
-            className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 text-ink-950 shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none sm:w-auto sm:px-5"
-          >
-            {loading ? (
-              <Spinner />
-            ) : (
-              <>
-                <svg viewBox="0 0 24 24" className="h-4 w-4 sm:hidden" aria-hidden>
-                  <path
-                    fill="currentColor"
-                    d="M10 2a8 8 0 1 0 4.9 14.3l5.4 5.4 1.4-1.4-5.4-5.4A8 8 0 0 0 10 2Zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12Z"
-                  />
-                </svg>
-                <span className="hidden text-sm font-semibold sm:inline">Search</span>
-              </>
-            )}
-          </button>
+          ))}
         </div>
+
+        <div className="grid grid-cols-2 gap-2.5">
+          <Field label="City">
+            <input
+              className={inputClass}
+              placeholder="Kyoto"
+              value={values.city}
+              autoComplete="address-level2"
+              onChange={(event) => update('city', event.target.value)}
+            />
+          </Field>
+          <Field label="Country">
+            <input
+              className={inputClass}
+              placeholder="Japan"
+              value={values.country}
+              autoComplete="country-name"
+              onChange={(event) => update('country', event.target.value)}
+            />
+          </Field>
+        </div>
+
+        <button
+          type="submit"
+          disabled={!canSubmit || loading}
+          className="w-full rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 px-4 py-2.5 text-[13.5px] font-semibold text-ink-950 shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none"
+        >
+          {loading ? 'Searching…' : 'Search'}
+        </button>
+
+        {!canSubmit && (
+          <p className="text-center text-[10.5px] text-mist-500">
+            Enter {missing.join(' and ')} to search.
+          </p>
+        )}
       </div>
 
-      <div className="mt-3 space-y-3 rounded-2xl border border-white/[0.07] bg-ink-900/60 p-3">
-        <label className="block">
-          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mist-500">
-            Download path
-          </span>
-          <div className="mt-1 flex gap-1.5">
-            <input
-              type="text"
-              className="flex-1 rounded-xl border border-white/[0.07] bg-ink-950/80 px-3 py-2 text-sm font-medium text-mist-100 outline-none focus:border-aqua-400 focus:ring-2 focus:ring-aqua-400/20"
-              placeholder="C:\\Users\\you\\Downloads\\Places"
-              value={values.downloadPath}
-              onChange={(event) => update('downloadPath', event.target.value)}
-            />
-            <button
-              type="button"
-              onClick={async () => {
-                setBrowsing(true);
-                setHintVisible(false);
-                try {
-                  const folder = await browseFolder();
-                  if (folder) update('downloadPath', folder);
-                } catch {
-                  // ignore; the field can still be typed manually.
-                } finally {
-                  setBrowsing(false);
-                }
-              }}
-              disabled={browsing}
-              className="shrink-0 rounded-xl border border-white/10 bg-white/5 px-3 text-[12px] font-semibold text-mist-200 transition hover:border-white/20 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+      {/* Advanced — collapsed by default so the common path stays three fields */}
+      <div className="rounded-2xl border border-white/[0.08] bg-ink-900/40">
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((open) => !open)}
+          aria-expanded={showAdvanced}
+          className="flex w-full items-center justify-between px-3.5 py-2.5 text-[12px] font-semibold text-mist-300 transition hover:text-mist-100"
+        >
+          <span>Options</span>
+          <span aria-hidden className={`transition ${showAdvanced ? 'rotate-180' : ''}`}>⌄</span>
+        </button>
+
+        {showAdvanced && (
+          <div className="space-y-3 border-t border-white/[0.06] p-3.5">
+            <Field
+              label="Max results"
+              hint="Blank means every place found. Each is researched separately, so large cities take longer."
             >
-              {browsing ? 'Choosing…' : 'Browse…'}
-            </button>
-          </div>
-          {hintVisible && (
-            <span className="mt-1 block text-[10.5px] leading-snug text-aqua-300">
-              A folder browser window is open. It may appear behind your browser.
-            </span>
-          )}
-        </label>
-        <label className="block">
-          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mist-500">
-            Additional links
-          </span>
-          <textarea
-            className="w-full min-h-[72px] rounded-xl border border-white/[0.07] bg-ink-950/80 px-3 py-2 text-sm font-medium text-mist-100 outline-none resize-y focus:border-aqua-400 focus:ring-2 focus:ring-aqua-400/20"
-            placeholder="https://example.com/article, https://another.example.com"
-            value={values.extraSources}
-            onChange={(event) => update('extraSources', event.target.value)}
-          />
-        </label>
+              <input
+                type="number"
+                min={0}
+                className={inputClass}
+                placeholder="All"
+                value={values.limit === 0 ? '' : values.limit}
+                onChange={(event) => update('limit', Number(event.target.value) || 0)}
+              />
+            </Field>
 
-        <label className="block">
-          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mist-500">
-            Max results
-          </span>
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={0}
-              className="w-24 rounded-xl border border-white/[0.07] bg-ink-950/80 px-3 py-2 text-sm font-medium text-mist-100 outline-none focus:border-aqua-400 focus:ring-2 focus:ring-aqua-400/20"
-              value={values.limit === 0 ? '' : values.limit}
-              placeholder="All"
-              onChange={(event) => update('limit', Number(event.target.value) || 0)}
+            <Field label="Save downloads to" hint="Where the ZIP is written">
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  className={inputClass}
+                  placeholder="Ask me each time"
+                  value={values.downloadPath}
+                  onChange={(event) => update('downloadPath', event.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={browsing}
+                  onClick={async () => {
+                    setBrowsing(true);
+                    setHintVisible(true);
+                    try {
+                      const folder = await browseFolder();
+                      if (folder) update('downloadPath', folder);
+                    } catch {
+                      // The field can still be typed manually.
+                    } finally {
+                      setBrowsing(false);
+                      setHintVisible(false);
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2.5 text-[11.5px] font-semibold text-mist-200 transition hover:border-white/20 hover:bg-white/10 disabled:opacity-50"
+                >
+                  {browsing ? '…' : 'Browse'}
+                </button>
+              </div>
+              {hintVisible && (
+                <span className="mt-1 block text-[10.5px] text-aqua-300">
+                  A folder window is open — it may be behind your browser.
+                </span>
+              )}
+            </Field>
+
+            <Field
+              label="Extra source links"
+              hint="Optional pages to read alongside Wikipedia, comma separated"
+            >
+              <textarea
+                className={`${inputClass} min-h-[60px] resize-y`}
+                placeholder="https://example.com/city-guide"
+                value={values.extraSources}
+                onChange={(event) => update('extraSources', event.target.value)}
+              />
+            </Field>
+
+            <Toggle
+              label="Use AI to check relevance"
+              hint="Off is much faster but keeps irrelevant places"
+              checked={values.useLlm}
+              onChange={(checked) => update('useLlm', checked)}
             />
-            <span className="text-[10.5px] leading-snug text-mist-500">
-              Blank = every place found. Each one is filtered and written up
-              individually, so a large city takes hours on a local model.
-            </span>
+            <Toggle
+              label="Find photographs"
+              hint="Adds images to the PDFs; slower"
+              checked={values.includeImages}
+              onChange={(checked) => update('includeImages', checked)}
+            />
           </div>
-        </label>
+        )}
       </div>
-
     </form>
   );
 }
 
 const inputClass =
-  'w-full bg-transparent text-[13.5px] font-medium text-mist-50 outline-none placeholder:text-mist-500/70';
+  'w-full rounded-lg border border-white/[0.08] bg-ink-950/70 px-2.5 py-2 text-[13px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
 
-function Segment({
+function Field({
   label,
+  hint,
   children,
-  grow,
 }: {
   label: string;
+  hint?: string;
   children: React.ReactNode;
-  grow?: boolean;
 }) {
   return (
-    <label
-      className={`flex min-w-0 cursor-text flex-col justify-center px-3.5 py-2 transition hover:bg-white/[0.03] ${
-        grow ? 'flex-[1.4]' : 'flex-1'
-      }`}
-    >
-      <span className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-mist-500">
-        {label}
-      </span>
+    <label className="block">
+      <span className="mb-1 block text-[11px] font-semibold text-mist-300">{label}</span>
       {children}
+      {hint && <span className="mt-1 block text-[10.5px] leading-snug text-mist-500">{hint}</span>}
     </label>
   );
 }
 
-function Divider() {
-  return <span aria-hidden className="my-2.5 w-px shrink-0 bg-white/[0.07]" />;
-}
-
-function Spinner() {
-  return (
-    <svg viewBox="0 0 24 24" className="h-4 w-4 animate-spin" aria-hidden>
-      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
-      <path
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="3"
-        strokeLinecap="round"
-        d="M21 12a9 9 0 0 0-9-9"
-      />
-    </svg>
-  );
-}
-
-function Switch({
+function Toggle({
   label,
   hint,
   checked,

@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { mapLimitSettled, chunk } from '../lib/concurrency.js';
 import { fetchJson, qs } from '../lib/http.js';
 import { cleanText } from '../lib/sanitize.js';
+import { commonsGeoSearch, europeanaSearch, flickrGeoSearch } from './imageSources.js';
 import type { PlaceImage, RawPlace } from '../types.js';
 
 const WIKIDATA_API = 'https://www.wikidata.org/w/api.php';
@@ -70,6 +71,12 @@ const ALLOWED_IMAGE_HOSTS = [
   'www.wikidata.org',
   'images.unsplash.com',
   'plus.unsplash.com',
+  // Flickr CDN shards serve the original-size renditions.
+  'live.staticflickr.com',
+  'www.flickr.com',
+  // Europeana proxies member-institution media through its own host.
+  'api.europeana.eu',
+  'proxy.europeana.eu',
   // Openverse serves originals from the source provider via its own CDN.
   'api.openverse.org',
   'api.openverse.engineering',
@@ -524,15 +531,20 @@ function rankImages(images: PlaceImage[]): PlaceImage[] {
   });
 
   // Ordered by how certain the source is to actually depict this exact place.
+  // Ordered by how certain the source is to depict this exact place. Anything
+  // resolved by an explicit link or by coordinates beats a free-text guess.
   const sourceWeight: Record<PlaceImage['source'], number> = {
-    google: 8, // only present in Google-engine results, where it is the sole source
-    wikidata: 7,
-    wikipedia: 6,
-    'commons-category': 5,
-    'wikipedia-article': 4,
-    commons: 3,
+    google: 11, // only present in Google-engine results, where it is the sole source
+    wikidata: 10, // the place's own P18 statement
+    wikipedia: 9, // lead image of the place's own article
+    'commons-category': 8, // the place's own Commons category
+    'commons-geo': 7, // photographed at these coordinates
+    flickr: 6, // geo-restricted search, reusable licence only
+    'wikipedia-article': 5,
+    europeana: 4,
+    commons: 3, // free-text search from here down
     openverse: 2,
-    unsplash: 1,
+    unsplash: 1, // generic stock
   };
 
   return unique.sort((a, b) => {
@@ -628,6 +640,25 @@ export async function fetchImagesForPlaces(
     // name we translated to English must also be searched under its original.
     const localName = place.tags['name:local'];
     const searchNames = [...new Set([place.name, localName].filter(Boolean))] as string[];
+
+    // 4b. Photographs taken AT the coordinates. More reliable than any name
+    // match — "Bell Tower" exists in a hundred cities, but this bell tower is
+    // only at these coordinates. Needs no API key.
+    if (short()) {
+      collected.push(
+        ...(await commonsGeoSearch(place, perPlace - collected.length, commonsApi, toPlaceImage)),
+      );
+    }
+
+    // 4c. Flickr, restricted to reusable licences and searched by position.
+    if (short() && config.images.flickrApiKey) {
+      collected.push(...(await flickrGeoSearch(place, options.city, perPlace - collected.length)));
+    }
+
+    // 4d. Europeana — museums, monuments and archives, open-reuse items only.
+    if (short() && config.images.europeanaApiKey) {
+      collected.push(...(await europeanaSearch(place, options.city, perPlace - collected.length)));
+    }
 
     // 5. Commons free-text search.
     for (const term of searchNames) {

@@ -188,6 +188,21 @@ export const config = {
   publicBaseUrl: str(process.env.PUBLIC_BASE_URL, `http://localhost:${num(process.env.PORT, 4000)}`).replace(/\/+$/, ''),
 
   unsplashAccessKey: str(process.env.UNSPLASH_ACCESS_KEY, ''),
+
+  /**
+   * Extra image sources. All free, all licensed for redistribution — which
+   * matters because imagery is embedded in PDFs the user keeps. Search-engine
+   * image results are deliberately not an option here: they are mostly
+   * all-rights-reserved and cannot lawfully be shipped inside an export.
+   */
+  images: {
+    /** flickr.com/services/apps/create/apply — CC-licensed, geotagged, huge. */
+    flickrApiKey: str(process.env.FLICKR_API_KEY, ''),
+    /** pro.europeana.eu/pages/get-api — museums, monuments, archives. */
+    europeanaApiKey: str(process.env.EUROPEANA_API_KEY, ''),
+    /** Radius for coordinate-based photo search. Small keeps it on-subject. */
+    geoRadiusKm: Number(process.env.IMAGE_GEO_RADIUS_KM ?? 1),
+  },
   imagesPerPlace: num(process.env.IMAGES_PER_PLACE, 10),
   minImageWidth: num(process.env.MIN_IMAGE_WIDTH, 1600),
   /** Openverse aggregates ~700M CC-licensed images and needs no API key. */

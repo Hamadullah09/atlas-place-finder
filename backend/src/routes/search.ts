@@ -8,6 +8,7 @@ import { getStore } from '../services/cache.js';
 import { GeocodeError } from '../services/geocode.js';
 import { googleConfigured, GoogleSearchError } from '../services/googleSearch.js';
 import { OverpassError } from '../services/overpass.js';
+import { createProgress, failProgress, getProgress } from '../services/progress.js';
 import { runSearch } from '../services/search.js';
 import { fetchWithPolicy } from '../lib/http.js';
 
@@ -24,6 +25,8 @@ const searchBodySchema = z.object({
   includeImages: z.boolean().optional(),
   refresh: z.boolean().optional(),
   source: z.enum(['osm', 'google']).optional(),
+  /** Client-generated id it polls for live stage updates. */
+  progressId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/).optional(),
 });
 
 /** An install pinned to one engine ignores whatever the client asked for. */
@@ -86,13 +89,18 @@ searchRouter.post('/search', searchLimiter, async (req, res, next) => {
     return;
   }
 
-  const { refresh, ...query } = parsed.data;
+  const { refresh, progressId, ...query } = parsed.data;
   query.source = resolveSource(query.source);
 
+  // Registered under the client's own id so it can poll from the moment it
+  // sends the request, rather than waiting for a response that is minutes away.
+  const progress = createProgress(progressId);
+
   try {
-    const result = await runSearch(query, { refresh });
+    const result = await runSearch(query, { refresh, progress });
     res.json(result);
   } catch (error) {
+    failProgress(progress, error instanceof Error ? error.message : String(error));
     // These are user-facing input/configuration problems, not server faults.
     if (error instanceof GeocodeError) {
       res.status(404).json({ error: error.message });
@@ -111,6 +119,16 @@ searchRouter.post('/search', searchLimiter, async (req, res, next) => {
     }
     next(error);
   }
+});
+
+/** Polled by the UI while a search request is still open. */
+searchRouter.get('/search/progress/:id', (req, res) => {
+  const progress = getProgress(req.params.id);
+  if (!progress) {
+    res.status(404).json({ error: 'Unknown or expired search.' });
+    return;
+  }
+  res.json(progress);
 });
 
 /**

@@ -5,7 +5,9 @@ import BatchPanel from '@/components/BatchPanel';
 import MapView from '@/components/MapView';
 import ResultsPanel from '@/components/ResultsPanel';
 import SearchForm, { type SearchFormValues } from '@/components/SearchForm';
-import { downloadArchive, searchPlaces } from '@/lib/api';
+import SearchProgressView from '@/components/SearchProgress';
+import WelcomePanel from '@/components/WelcomePanel';
+import { downloadArchive, searchPlaces, type SearchProgress } from '@/lib/api';
 import type { Place, SearchResult } from '@/lib/types';
 
 const DEFAULT_VALUES: SearchFormValues = {
@@ -32,6 +34,10 @@ export default function PlaceFinder() {
   const [downloadingAll, setDownloadingAll] = useState(false);
   const [downloadingPlaceId, setDownloadingPlaceId] = useState<string | null>(null);
 
+  const [progress, setProgress] = useState<SearchProgress | null>(null);
+  const [startedAt, setStartedAt] = useState(0);
+  const [formValues, setFormValues] = useState<SearchFormValues>(DEFAULT_VALUES);
+
   const searchAbort = useRef<AbortController | null>(null);
   const downloadAbort = useRef<AbortController | null>(null);
 
@@ -57,8 +63,15 @@ export default function PlaceFinder() {
     setLoading(true);
     setError(null);
     setSelectedId(null);
+    setProgress(null);
+    setStartedAt(Date.now());
+    setFormValues(values);
     try {
-      const response = await searchPlaces({ ...values, source: engine }, controller.signal);
+      const response = await searchPlaces(
+        { ...values, source: engine },
+        controller.signal,
+        setProgress,
+      );
       setResult(response);
       if (response.places.length === 0) {
         setToast({
@@ -74,6 +87,7 @@ export default function PlaceFinder() {
       if (searchAbort.current === controller) {
         searchAbort.current = null;
         setLoading(false);
+        setProgress(null);
       }
     }
   }, []);
@@ -163,32 +177,71 @@ export default function PlaceFinder() {
       </div>
 
       {/* Control panel — floats over the map on large screens */}
-      <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[404px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-black/50 lg:glass">
+      <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[440px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-black/50 lg:glass">
         {mode === 'single' ? (
-          <>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-region pr-0.5">
             <div className="shrink-0">
               <SearchForm
                 initialValues={DEFAULT_VALUES}
+                values={formValues}
                 loading={loading}
                 onSearch={handleSearch}
                 onCancel={handleCancelSearch}
               />
             </div>
 
-            <section className="flex min-h-0 flex-1 flex-col" aria-label="Search results">
-              <ResultsPanel
-                result={result}
-                loading={loading}
-                error={error}
-                selectedId={selectedId}
-                downloadingAll={downloadingAll}
-                downloadingPlaceId={downloadingPlaceId}
-                onSelect={handleSelect}
-                onDownloadPlace={handleDownloadPlace}
-                onDownloadAll={handleDownloadAll}
-              />
-            </section>
-          </>
+            {/* One of: live progress, an error, first-run help, or results. */}
+            {loading && (
+              <div className="shrink-0">
+                <SearchProgressView
+                  progress={progress}
+                  startedAt={startedAt}
+                  onCancel={handleCancelSearch}
+                />
+              </div>
+            )}
+
+            {!loading && error && (
+              <div className="shrink-0 rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5">
+                <p className="text-[12.5px] font-semibold text-red-300">Search failed</p>
+                <p className="mt-1 text-[11.5px] leading-relaxed text-mist-300">{error}</p>
+              </div>
+            )}
+
+            {!loading && !error && !result && (
+              <div className="shrink-0">
+                <WelcomePanel
+                  onExample={() => {
+                    const example = {
+                      ...DEFAULT_VALUES,
+                      keyword: 'museums',
+                      city: 'Kyoto',
+                      country: 'Japan',
+                      limit: 20,
+                    };
+                    setFormValues(example);
+                    void handleSearch(example);
+                  }}
+                />
+              </div>
+            )}
+
+            {result && !loading && (
+              <section className="flex min-h-0 flex-1 flex-col" aria-label="Search results">
+                <ResultsPanel
+                  result={result}
+                  loading={false}
+                  error={null}
+                  selectedId={selectedId}
+                  downloadingAll={downloadingAll}
+                  downloadingPlaceId={downloadingPlaceId}
+                  onSelect={handleSelect}
+                  onDownloadPlace={handleDownloadPlace}
+                  onDownloadAll={handleDownloadAll}
+                />
+              </section>
+            )}
+          </div>
         ) : (
           <BatchPanel engine={engine} />
         )}

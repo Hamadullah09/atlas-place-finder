@@ -10,6 +10,7 @@ import { runGoogleSearch } from './googleSearch.js';
 import { fetchImagesForPlaces, isCommonsUnreachable } from './images.js';
 import { enrichPlaces } from './llm.js';
 import { dedupePlaces, informationScore, searchOverpass } from './overpass.js';
+import { setStage, type SearchProgress } from './progress.js';
 import { semanticDedupe } from './semanticDedupe.js';
 import { applyEnglishNames } from './translate.js';
 import type { Place, PlaceImage, RawPlace, SearchQuery, SearchResult } from '../types.js';
@@ -35,6 +36,8 @@ export function googleMapsUrl(place: Pick<RawPlace, 'name' | 'lat' | 'lon'>): st
 export interface RunSearchOptions {
   /** Bypass the cache and re-query the upstream APIs. */
   refresh?: boolean;
+  /** Receives stage updates so a long search can show live progress. */
+  progress?: SearchProgress;
 }
 
 /**
@@ -81,10 +84,12 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     );
   }
 
+  setStage(options.progress, 'geocoding', { message: `Locating ${city}, ${country}` });
   const area = await geocodeCity(city, country);
 
   // Overpass is the primary source; Wikidata and Nominatim run alongside it to
   // catch landmarks that are notable but thinly mapped in OSM.
+  setStage(options.progress, 'discovering');
   const [overpassResult, wikidataPlaces, nominatimPlaces] = await Promise.all([
     searchOverpass(resolved, area, limit),
     discoverViaWikidata(resolved, area, limit).catch(() => [] as RawPlace[]),
@@ -117,6 +122,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
 
   // Give non-Latin names an English form before anything downstream uses them:
   // the LLM filter, the image queries and the PDF all read `place.name`.
+  setStage(options.progress, 'naming', { total: candidates.length });
   const naming = await applyEnglishNames(candidates).catch(() => ({ translated: 0, note: undefined }));
   if (naming.note) warnings.push(naming.note);
 
@@ -130,6 +136,10 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   if (semantic.note) warnings.push(semantic.note);
   const named = semantic.places;
 
+  setStage(options.progress, 'filtering', {
+    total: named.length,
+    message: `Checking ${named.length} places are relevant`,
+  });
   const enrichment = await enrichPlaces(named, { keyword, city: area.city, country: area.country, useLlm });
   warnings.push(...enrichment.warnings);
 
@@ -141,6 +151,10 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
 
   let imagesByPlace = new Map<string, PlaceImage[]>();
   if (includeImages && kept.length > 0) {
+    setStage(options.progress, 'imagery', {
+      total: kept.length,
+      message: `Finding photographs for ${kept.length} places`,
+    });
     try {
       imagesByPlace = await fetchImagesForPlaces(kept, {
         city: area.city,
@@ -210,5 +224,10 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     console.warn('[search] failed to cache result:', error instanceof Error ? error.message : error);
   });
 
+  setStage(options.progress, 'done', {
+    message: `Found ${result.places.length} places`,
+    done: result.places.length,
+    total: result.places.length,
+  });
   return result;
 }

@@ -28,18 +28,59 @@ async function readError(response: Response): Promise<never> {
   throw new ApiError(response.status, message, details);
 }
 
+export type SearchStage =
+  | 'starting' | 'geocoding' | 'discovering' | 'naming'
+  | 'filtering' | 'imagery' | 'done' | 'failed';
+
+export interface SearchProgress {
+  id: string;
+  stage: SearchStage;
+  message: string;
+  done?: number;
+  total?: number;
+  startedAt: number;
+  updatedAt: number;
+  error?: string;
+}
+
+/**
+ * Runs a search and reports progress while it is in flight.
+ *
+ * A whole-city search takes minutes, so the request returns a progress id in a
+ * header and this polls it until the body arrives. `onProgress` is called with
+ * each stage so the UI can show what the server is actually doing.
+ */
 export async function searchPlaces(
   query: SearchQuery & { refresh?: boolean },
   signal?: AbortSignal,
+  onProgress?: (progress: SearchProgress) => void,
 ): Promise<SearchResult> {
-  const response = await fetch(`${API_BASE_URL}/api/search`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(query),
-    signal,
-  });
-  if (!response.ok) await readError(response);
-  return (await response.json()) as SearchResult;
+  // Our own id, sent with the request, so polling can begin immediately.
+  const progressId =
+    globalThis.crypto?.randomUUID?.() ?? `s${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+
+  let poller: ReturnType<typeof setInterval> | undefined;
+  if (onProgress) {
+    poller = setInterval(() => {
+      void fetch(`${API_BASE_URL}/api/search/progress/${progressId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((p) => { if (p) onProgress(p as SearchProgress); })
+        .catch(() => undefined);
+    }, 1_200);
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...query, progressId }),
+      signal,
+    });
+    if (!response.ok) await readError(response);
+    return (await response.json()) as SearchResult;
+  } finally {
+    if (poller) clearInterval(poller);
+  }
 }
 
 export async function fetchCategories(signal?: AbortSignal): Promise<CategorySuggestion[]> {

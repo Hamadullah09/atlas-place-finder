@@ -21,7 +21,10 @@ export type ImageSource =
   | 'wikipedia'
   | 'commons'
   | 'commons-category'
+  | 'commons-geo'
   | 'wikipedia-article'
+  | 'flickr'
+  | 'europeana'
   | 'openverse'
   | 'unsplash'
   | 'google';
