@@ -24,7 +24,9 @@ const startSchema = z.object({
   extraSources: z.union([z.string().max(4000), z.array(z.string().url()).max(20)]).optional(),
   includeImages: z.boolean().optional(),
   detailedWriteups: z.boolean().optional(),
-  limit: z.number().int().min(1).max(100).optional(),
+  // Omit (or 0) to export every place found in each region.
+  limit: z.number().int().min(0).max(config.maxResults).optional()
+    .transform((value) => (value === 0 ? undefined : value)),
   overwrite: z.boolean().optional(),
   allowDuplicates: z.boolean().optional(),
   source: z.enum(['osm', 'google']).optional(),

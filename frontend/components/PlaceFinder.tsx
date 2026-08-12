@@ -12,7 +12,8 @@ const DEFAULT_VALUES: SearchFormValues = {
   keyword: '',
   city: '',
   country: '',
-  limit: 20,
+  // 0 means "no limit" — the server returns everything it finds.
+  limit: 0,
   useLlm: true,
   includeImages: true,
   downloadPath: '',

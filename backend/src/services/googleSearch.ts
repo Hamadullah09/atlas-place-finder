@@ -230,7 +230,7 @@ export async function runGoogleSearch(query: SearchQuery): Promise<SearchResult>
   const keyword = query.keyword.trim();
   const city = query.city.trim();
   const country = query.country.trim();
-  const limit = Math.min(Math.max(query.limit ?? 20, 1), config.maxResults);
+  const limit = Math.min(Math.max(query.limit ?? config.maxResults, 1), config.maxResults);
   const includeImages = query.includeImages !== false;
 
   const area = await geocodeViaGoogle(city, country);

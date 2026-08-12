@@ -50,7 +50,8 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   const keyword = query.keyword.trim();
   const city = query.city.trim();
   const country = query.country.trim();
-  const limit = Math.min(Math.max(query.limit ?? 20, 1), config.maxResults);
+  // No limit given means "everything this city has", not a sample of 20.
+  const limit = Math.min(Math.max(query.limit ?? config.maxResults, 1), config.maxResults);
   const useLlm = query.useLlm !== false;
   const includeImages = query.includeImages !== false;
   const source: 'osm' | 'google' = query.source === 'google' ? 'google' : 'osm';

@@ -152,7 +152,13 @@ export const config = {
     'https://overpass.osm.ch/api/interpreter',
   ]),
   overpassTimeoutMs: num(process.env.OVERPASS_TIMEOUT_MS, 90_000),
-  maxResults: num(process.env.MAX_RESULTS, 60),
+  /**
+   * Ceiling on results per search. Raised well above the old 60 so a city can
+   * be exported exhaustively; the cost is time, not correctness — every place
+   * kept is filtered and written up individually, so a 300-place city is
+   * hours of local inference. Lower it if you want quick sampling instead.
+   */
+  maxResults: num(process.env.MAX_RESULTS, 300),
 
   /**
    * Which place-search engines this installation offers:
@@ -315,7 +321,8 @@ export const config = {
 
   /** Hard ceilings so a hostile payload can't make us zip 10k files. */
   limits: {
-    maxPlacesPerArchive: 100,
+    /** Kept in step with MAX_RESULTS so a full search can be fully exported. */
+    maxPlacesPerArchive: num(process.env.MAX_PLACES_PER_ARCHIVE, Math.max(300, num(process.env.MAX_RESULTS, 300))),
     maxImagesPerPlace: 24,
     maxImageBytes: 25 * 1024 * 1024,
     maxRequestBodyBytes: 8 * 1024 * 1024,

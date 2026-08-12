@@ -179,6 +179,26 @@ export default function SearchForm({ initialValues, loading, onSearch, onCancel 
             onChange={(event) => update('extraSources', event.target.value)}
           />
         </label>
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-mist-500">
+            Max results
+          </span>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              className="w-24 rounded-xl border border-white/[0.07] bg-ink-950/80 px-3 py-2 text-sm font-medium text-mist-100 outline-none focus:border-aqua-400 focus:ring-2 focus:ring-aqua-400/20"
+              value={values.limit === 0 ? '' : values.limit}
+              placeholder="All"
+              onChange={(event) => update('limit', Number(event.target.value) || 0)}
+            />
+            <span className="text-[10.5px] leading-snug text-mist-500">
+              Blank = every place found. Each one is filtered and written up
+              individually, so a large city takes hours on a local model.
+            </span>
+          </div>
+        </label>
       </div>
 
     </form>

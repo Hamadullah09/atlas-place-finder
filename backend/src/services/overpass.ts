@@ -247,8 +247,10 @@ export async function searchOverpass(
   area: GeoArea,
   limit: number,
 ): Promise<OverpassSearchResult> {
-  // Over-fetch: many elements have no name and get dropped below.
-  const fetchLimit = Math.min(600, Math.max(limit * 6, 150));
+  // Over-fetch: most elements are unnamed and get dropped below, and same-named
+  // segments then collapse, so the raw pull must be far larger than the target.
+  // The 3000 ceiling is Overpass politeness, not a product decision.
+  const fetchLimit = Math.min(3000, Math.max(limit * 6, 150));
   const query = buildOverpassQuery(resolved, area, fetchLimit);
   const payload = await runQuery(query);
   const elements = payload.elements ?? [];

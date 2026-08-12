@@ -17,7 +17,9 @@ const searchBodySchema = z.object({
   keyword: z.string().trim().min(2, 'keyword must be at least 2 characters').max(80),
   city: z.string().trim().min(1, 'city is required').max(120),
   country: z.string().trim().min(1, 'country is required').max(120),
-  limit: z.number().int().min(1).max(config.maxResults).optional(),
+  // 0 is accepted as "no limit" and resolves to the server ceiling.
+  limit: z.number().int().min(0).max(config.maxResults).optional()
+    .transform((value) => (value === 0 ? undefined : value)),
   useLlm: z.boolean().optional(),
   includeImages: z.boolean().optional(),
   refresh: z.boolean().optional(),
