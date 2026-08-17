@@ -39,6 +39,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
   const [job, setJob] = useState<BatchJob | null>(null);
   const [starting, setStarting] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [hintVisible, setHintVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -168,9 +169,21 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
     && !starting;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-region pr-0.5">
+    <div className="mx-auto w-full max-w-5xl">
+      <div className="text-center">
+        <h1 className="text-[24px] font-semibold tracking-tight text-mist-50 sm:text-[28px]">
+          Work through a whole list of cities
+        </h1>
+        <p className="mx-auto mt-2 max-w-xl text-[13px] leading-relaxed text-mist-400">
+          Upload a CSV, set three things once, and leave it running. One ZIP of
+          illustrated PDFs is saved per city.
+        </p>
+      </div>
+
+      {/* Setup reads left-to-right: the sheet, then what to do with it. */}
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
       {/* ---- Step 1: CSV -------------------------------------------------- */}
-      <section className="rounded-2xl border border-white/[0.08] bg-ink-850/70 p-3.5">
+      <section className="rounded-2xl border border-white/[0.08] bg-ink-850/70 p-4">
         <SectionTitle step="1" title="Location CSV" />
         <p className="mt-1 text-[11px] leading-snug text-mist-500">
           Columns: Country, City, Province/State. Country may appear once and is
@@ -190,17 +203,41 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
           }}
         />
 
-        <div className="mt-2.5 flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => fileRef.current?.click()}
-            disabled={running}
-            className="rounded-xl border border-aqua-500/40 bg-aqua-500/10 px-3.5 py-2 text-[12.5px] font-semibold text-aqua-300 transition hover:bg-aqua-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {csvName ? 'Replace CSV' : 'Upload CSV'}
-          </button>
-          {csvName && <span className="truncate text-[12px] text-mist-300">{csvName}</span>}
-        </div>
+        {/* Drop target: dragging a sheet in is the obvious gesture, and the
+            whole area is clickable rather than just a small button. */}
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={running}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            const file = event.dataTransfer.files?.[0];
+            if (file) void handleFile(file);
+          }}
+          className={`mt-3 flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed px-4 py-6 transition disabled:cursor-not-allowed disabled:opacity-50 ${
+            dragging
+              ? 'border-aqua-400 bg-aqua-500/10'
+              : csvName
+                ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
+                : 'border-white/15 bg-white/[0.02] hover:border-aqua-500/40 hover:bg-aqua-500/[0.06]'
+          }`}
+        >
+          <span aria-hidden className="text-xl opacity-70">
+            {csvName ? '✓' : '⬆'}
+          </span>
+          <span className="text-[13px] font-semibold text-mist-100">
+            {csvName ?? 'Drop your CSV here, or click to choose'}
+          </span>
+          <span className="text-[11px] text-mist-500">
+            {csvName ? 'Click to replace' : '.csv files only'}
+          </span>
+        </button>
 
         {preview && (
           <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
@@ -224,7 +261,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
       </section>
 
       {/* ---- Step 2: session inputs -------------------------------------- */}
-      <section className="rounded-2xl border border-white/[0.08] bg-ink-850/70 p-3.5">
+      <section className="rounded-2xl border border-white/[0.08] bg-ink-850/70 p-4">
         <SectionTitle step="2" title="What & where to save" />
 
         <label className="mt-2.5 block">
@@ -329,10 +366,11 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
         </div>
         {error && <p className="mt-2 text-[11.5px] text-red-300">{error}</p>}
       </section>
+      </div>
 
-      {/* ---- Step 3: progress -------------------------------------------- */}
+      {/* ---- Step 3: progress — full width, it is the long-lived view ----- */}
       {job && progress && (
-        <section className="flex min-h-0 flex-col rounded-2xl border border-white/[0.08] bg-ink-850/70 p-3.5">
+        <section className="mt-4 flex min-h-0 flex-col rounded-2xl border border-white/[0.08] bg-ink-850/70 p-4">
           <SectionTitle step="3" title="Progress" />
 
           <div className="mt-2 flex items-center justify-between text-[12px] text-mist-300">
@@ -363,7 +401,9 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             />
           </div>
 
-          <ul className="mt-2.5 max-h-64 space-y-1 overflow-y-auto scroll-region pr-1 text-[12px]">
+          {/* A CSV of 70+ cities is unreadable as one long column at this
+              width; three columns keeps the whole run visible at once. */}
+          <ul className="mt-3 grid max-h-[22rem] grid-cols-1 gap-x-4 gap-y-1 overflow-y-auto scroll-region pr-1 text-[12px] sm:grid-cols-2 xl:grid-cols-3">
             {job.rows.map((row, index) => {
               const meta = STATUS_META[row.status];
               const active = index === job.currentIndex && job.status === 'running';
@@ -371,7 +411,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                 <li
                   key={`${row.country}-${row.kind}-${row.region}`}
                   className={`flex items-baseline justify-between gap-2 rounded-lg px-2 py-1 ${
-                    active ? 'bg-aqua-500/10' : ''
+                    active ? 'bg-aqua-500/10 ring-1 ring-aqua-500/30' : ''
                   }`}
                 >
                   <span className="truncate text-mist-200">

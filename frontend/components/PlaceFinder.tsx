@@ -5,8 +5,8 @@ import BatchPanel from '@/components/BatchPanel';
 import MapView from '@/components/MapView';
 import ResultsPanel from '@/components/ResultsPanel';
 import SearchForm, { type SearchFormValues } from '@/components/SearchForm';
+import HeroSearch from '@/components/HeroSearch';
 import SearchProgressView from '@/components/SearchProgress';
-import WelcomePanel from '@/components/WelcomePanel';
 import { downloadArchive, searchPlaces, type SearchProgress } from '@/lib/api';
 import type { Place, SearchResult } from '@/lib/types';
 
@@ -145,6 +145,12 @@ export default function PlaceFinder() {
     [runDownload],
   );
 
+  // Before the first search there is nothing to plot, so the form owns the
+  // whole window rather than being squeezed beside an empty map.
+  const showHero = mode === 'single' && !result && !loading && !error;
+  // Batch never plots anything, so it always gets the full window.
+  const showBatch = mode === 'batch';
+
   const content = (
     <>
       {/* Mode bar — sits directly under the app header */}
@@ -170,6 +176,20 @@ export default function PlaceFinder() {
         ))}
       </div>
 
+      {showBatch ? (
+        <div className="flex min-h-0 flex-1 overflow-y-auto scroll-region px-4 py-6">
+          <BatchPanel engine={engine} />
+        </div>
+      ) : showHero ? (
+        <HeroSearch
+          initialValues={DEFAULT_VALUES}
+          values={formValues}
+          loading={loading}
+          onSearch={handleSearch}
+          onCancel={handleCancelSearch}
+          onBatch={() => setMode('batch')}
+        />
+      ) : (
       <div className="relative flex min-h-0 flex-1 flex-col lg:block">
       {/* Map — in flow on small screens, full-bleed canvas on large */}
       <div className="relative order-1 h-[38vh] shrink-0 border-b border-white/[0.06] lg:absolute lg:inset-0 lg:h-auto lg:border-0">
@@ -178,7 +198,7 @@ export default function PlaceFinder() {
 
       {/* Control panel — floats over the map on large screens */}
       <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[440px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-black/50 lg:glass">
-        {mode === 'single' ? (
+        {(
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-region pr-0.5">
             <div className="shrink-0">
               <SearchForm
@@ -190,7 +210,8 @@ export default function PlaceFinder() {
               />
             </div>
 
-            {/* One of: live progress, an error, first-run help, or results. */}
+            {/* One of: live progress, an error, or results. The first-run case
+                is handled by the hero screen, so it cannot occur here. */}
             {loading && (
               <div className="shrink-0">
                 <SearchProgressView
@@ -205,24 +226,6 @@ export default function PlaceFinder() {
               <div className="shrink-0 rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5">
                 <p className="text-[12.5px] font-semibold text-red-300">Search failed</p>
                 <p className="mt-1 text-[11.5px] leading-relaxed text-mist-300">{error}</p>
-              </div>
-            )}
-
-            {!loading && !error && !result && (
-              <div className="shrink-0">
-                <WelcomePanel
-                  onExample={() => {
-                    const example = {
-                      ...DEFAULT_VALUES,
-                      keyword: 'museums',
-                      city: 'Kyoto',
-                      country: 'Japan',
-                      limit: 20,
-                    };
-                    setFormValues(example);
-                    void handleSearch(example);
-                  }}
-                />
               </div>
             )}
 
@@ -242,8 +245,6 @@ export default function PlaceFinder() {
               </section>
             )}
           </div>
-        ) : (
-          <BatchPanel engine={engine} />
         )}
       </div>
 
@@ -272,6 +273,7 @@ export default function PlaceFinder() {
         </div>
       )}
       </div>
+      )}
     </>
   );
 
