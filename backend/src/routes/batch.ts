@@ -18,7 +18,9 @@ const previewSchema = z.object({ csv: csvSchema });
 
 const startSchema = z.object({
   csv: csvSchema,
-  attribute: z.string().trim().min(2).max(80),
+  // "all", a single type, or a comma-separated list such as
+  // "museums, parks, hotels". Longer than a single keyword needs to be.
+  attribute: z.string().trim().min(2).max(300),
   outputPath: z.string().trim().min(3).max(500),
   /** Comma-separated or array — the UI sends whatever the user typed. */
   extraSources: z.union([z.string().max(4000), z.array(z.string().url()).max(20)]).optional(),
@@ -87,7 +89,7 @@ $owner.Show()
 [Native.W]::SetForegroundWindow($owner.Handle) | Out-Null
 
 $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-$dlg.Description = 'Choose where Place Finder saves the batch ZIP files'
+$dlg.Description = 'Choose where SMA Place Finder saves the batch ZIP files'
 $dlg.ShowNewFolderButton = $true
 if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
   Write-Output $dlg.SelectedPath
@@ -193,6 +195,7 @@ batchRouter.post('/batch', async (req, res, next) => {
       includeImages: parsed.data.includeImages,
       detailedWriteups: parsed.data.detailedWriteups,
       limit: parsed.data.limit,
+      sheetMaxSearch: sheet.maxSearch,
       overwrite: parsed.data.overwrite,
       allowDuplicates: parsed.data.allowDuplicates,
       source:

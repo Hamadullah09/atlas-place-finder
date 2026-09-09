@@ -186,8 +186,8 @@ async function start(): Promise<void> {
     config.llm.enabled
       ? `[place-finder] LLM: ${config.llm.model} via ${config.llm.baseUrl}`
       : '[place-finder] LLM: none found. Install Ollama (https://ollama.com) and run\n'
-        + '                  "ollama pull qwen2.5:1.5b" for AI-written PDF articles,\n'
-        + '                  or set LLM_* in the .env file. Exports still work without it.',
+        + '                  "ollama pull qwen3:8b" and "ollama pull bge-m3" for\n'
+        + '                  AI-written PDF articles. Exports still work without them.',
   );
 
   openBrowser(port);

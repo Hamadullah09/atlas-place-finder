@@ -1,10 +1,13 @@
+import { createWriteStream } from 'node:fs';
+import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { rateLimit } from '../lib/rateLimit.js';
 import { archiveFilename, streamPlacesArchive } from '../services/archive.js';
 import { getStore } from '../services/cache.js';
-import type { Place, SearchResult } from '../types.js';
+import type { ImageSource, Place, SearchResult } from '../types.js';
 
 export const downloadRouter = Router();
 
@@ -14,7 +17,12 @@ const imageSchema = z.object({
   thumbUrl: z.string().url(),
   width: z.number().optional(),
   height: z.number().optional(),
-  source: z.enum(['wikidata', 'wikipedia', 'commons', 'unsplash']),
+  // Kept in step with the ImageSource union in types.ts — a hand-copied
+  // subset previously rejected most real results on this code path.
+  source: z.enum([
+    'wikidata', 'wikipedia', 'commons', 'commons-category', 'commons-geo',
+    'wikipedia-article', 'flickr', 'europeana', 'openverse', 'unsplash', 'google',
+  ] as const satisfies readonly ImageSource[]),
   title: z.string().max(200).optional(),
   credit: z.string().max(300).optional(),
   license: z.string().max(200).optional(),
@@ -70,6 +78,9 @@ const downloadBodySchema = z.union([
     includeImages: z.boolean().optional(),
     includeSummary: z.boolean().optional(),
     detailedWriteups: z.boolean().optional(),
+    /** Absolute folder on the server. When set, the ZIP is written there
+     *  instead of being streamed back to the browser. */
+    savePath: z.string().trim().max(500).optional(),
   }),
   // Fallback: the client sends the payload it already has.
   z.object({
@@ -80,6 +91,9 @@ const downloadBodySchema = z.union([
     includeImages: z.boolean().optional(),
     includeSummary: z.boolean().optional(),
     detailedWriteups: z.boolean().optional(),
+    /** Absolute folder on the server. When set, the ZIP is written there
+     *  instead of being streamed back to the browser. */
+    savePath: z.string().trim().max(500).optional(),
   }),
 ]);
 
@@ -160,6 +174,49 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
 
   const filename = archiveFilename(resolved);
 
+  const options = {
+    includeImages: parsed.data.includeImages ?? true,
+    includeSummary: parsed.data.includeSummary ?? true,
+    detailedWriteups: parsed.data.detailedWriteups ?? true,
+  };
+
+  // ---- Save on the server ------------------------------------------------
+  // The browser cannot choose a folder, so when the operator has set one we
+  // write the archive there directly and reply with the path. Staged under a
+  // .part name and renamed on success, so a failure never leaves a partial
+  // file that looks finished.
+  const savePath = parsed.data.savePath?.trim();
+  if (savePath) {
+    if (!path.isAbsolute(savePath)) {
+      res.status(400).json({ error: `Save folder must be an absolute path (got "${savePath}").` });
+      return;
+    }
+
+    const target = path.join(savePath, filename);
+    const staging = `${target}.part`;
+    try {
+      await mkdir(savePath, { recursive: true });
+      const info = await stat(savePath);
+      if (!info.isDirectory()) throw new Error(`${savePath} is not a folder`);
+
+      await rm(staging, { force: true }).catch(() => undefined);
+      await streamPlacesArchive(createWriteStream(staging), { ...resolved, options });
+      await rm(target, { force: true }).catch(() => undefined);
+      await rename(staging, target);
+
+      const { size } = await stat(target);
+      res.json({ saved: true, path: target, filename, bytes: size, places: resolved.places.length });
+    } catch (error) {
+      await rm(staging, { force: true }).catch(() => undefined);
+      const message = error instanceof Error ? error.message : String(error);
+      console.error('[download] save to disk failed:', message);
+      res.status(/EACCES|EPERM|ENOENT|not a folder/i.test(message) ? 400 : 500)
+        .json({ error: `Could not save to ${savePath}: ${message}` });
+    }
+    return;
+  }
+
+  // ---- Stream to the browser ---------------------------------------------
   res.status(200);
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -169,14 +226,7 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
   res.setHeader('X-Accel-Buffering', 'no');
 
   try {
-    await streamPlacesArchive(res, {
-      ...resolved,
-      options: {
-        includeImages: parsed.data.includeImages ?? true,
-        includeSummary: parsed.data.includeSummary ?? true,
-        detailedWriteups: parsed.data.detailedWriteups ?? true,
-      },
-    });
+    await streamPlacesArchive(res, { ...resolved, options });
   } catch (error) {
     console.error('[download] archive failed:', error);
     // Headers are already out, so the only honest signal is a broken stream —

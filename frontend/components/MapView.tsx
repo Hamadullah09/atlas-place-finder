@@ -46,7 +46,7 @@ export default function MapView({ places, area }: MapViewProps) {
             <span aria-hidden className="text-3xl opacity-30">
               🗺
             </span>
-            <p className="mt-2 text-[12.5px] text-mist-500">Run a search to plot results here.</p>
+            <p className="mt-2 text-[17px] text-mist-500">Run a search to plot results here.</p>
           </div>
         </div>
       )}

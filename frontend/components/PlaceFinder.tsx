@@ -11,7 +11,8 @@ import { downloadArchive, searchPlaces, type SearchProgress } from '@/lib/api';
 import type { Place, SearchResult } from '@/lib/types';
 
 const DEFAULT_VALUES: SearchFormValues = {
-  keyword: '',
+  // Every kind of place by default; the user narrows it if they want to.
+  keyword: 'all',
   city: '',
   country: '',
   // 0 means "no limit" — the server returns everything it finds.
@@ -118,12 +119,23 @@ export default function PlaceFinder() {
       else setDownloadingAll(true);
 
       try {
-        const filename = await downloadArchive(
-          { searchId: result.searchId, placeIds },
+        // A configured save folder means the server writes the file for us,
+        // so the message has to say where it went rather than "downloaded".
+        const outcome = await downloadArchive(
+          {
+            searchId: result.searchId,
+            placeIds,
+            savePath: formValues.downloadPath.trim() || undefined,
+          },
           `${result.query.keyword}-${result.area.city}.zip`,
           controller.signal,
         );
-        setToast({ tone: 'info', message: `Downloaded ${filename}` });
+        setToast({
+          tone: 'info',
+          message: outcome.kind === 'saved'
+            ? `Saved to ${outcome.path}`
+            : `Downloaded ${outcome.filename}`,
+        });
       } catch (caught) {
         if (controller.signal.aborted) return;
         setToast({
@@ -136,7 +148,7 @@ export default function PlaceFinder() {
         setDownloadingAll(false);
       }
     },
-    [result],
+    [result, formValues.downloadPath],
   );
 
   const handleDownloadAll = useCallback(() => void runDownload(undefined, null), [runDownload]);
@@ -154,7 +166,7 @@ export default function PlaceFinder() {
   const content = (
     <>
       {/* Mode bar — sits directly under the app header */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-white/[0.06] bg-ink-950/60 px-4 py-1.5 backdrop-blur-xl sm:px-5">
+      <div className="flex shrink-0 items-center gap-1 border-b border-slate-200 bg-ink-950/60 px-4 py-1.5 backdrop-blur-xl sm:px-5">
         {(
           [
             { id: 'single', label: 'Single search' },
@@ -165,10 +177,10 @@ export default function PlaceFinder() {
             key={tab.id}
             type="button"
             onClick={() => setMode(tab.id)}
-            className={`rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold transition ${
+            className={`rounded-lg px-3.5 py-1.5 text-[17px] font-semibold transition ${
               mode === tab.id
                 ? 'bg-aqua-500/15 text-aqua-300'
-                : 'text-mist-400 hover:bg-white/[0.04] hover:text-mist-200'
+                : 'text-mist-400 hover:bg-slate-50 hover:text-mist-200'
             }`}
           >
             {tab.label}
@@ -192,12 +204,12 @@ export default function PlaceFinder() {
       ) : (
       <div className="relative flex min-h-0 flex-1 flex-col lg:block">
       {/* Map — in flow on small screens, full-bleed canvas on large */}
-      <div className="relative order-1 h-[38vh] shrink-0 border-b border-white/[0.06] lg:absolute lg:inset-0 lg:h-auto lg:border-0">
+      <div className="relative order-1 h-[38vh] shrink-0 border-b border-slate-200 lg:absolute lg:inset-0 lg:h-auto lg:border-0">
         <MapView places={result?.places ?? []} area={result?.area ?? null} />
       </div>
 
       {/* Control panel — floats over the map on large screens */}
-      <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[440px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-black/50 lg:glass">
+      <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[440px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-slate-900/10 lg:glass">
         {(
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-region pr-0.5">
             <div className="shrink-0">
@@ -224,8 +236,8 @@ export default function PlaceFinder() {
 
             {!loading && error && (
               <div className="shrink-0 rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5">
-                <p className="text-[12.5px] font-semibold text-red-300">Search failed</p>
-                <p className="mt-1 text-[11.5px] leading-relaxed text-mist-300">{error}</p>
+                <p className="text-[17px] font-semibold text-red-700">Search failed</p>
+                <p className="mt-1 text-[16px] leading-relaxed text-mist-300">{error}</p>
               </div>
             )}
 
@@ -241,6 +253,7 @@ export default function PlaceFinder() {
                   onSelect={handleSelect}
                   onDownloadPlace={handleDownloadPlace}
                   onDownloadAll={handleDownloadAll}
+                  savePath={formValues.downloadPath.trim() || undefined}
                 />
               </section>
             )}
@@ -251,8 +264,8 @@ export default function PlaceFinder() {
       {toast && (
         <div
           role="status"
-          className={`fixed bottom-4 left-1/2 z-50 flex max-w-[92vw] -translate-x-1/2 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-[12.5px] shadow-2xl shadow-black/60 glass-strong ${
-            toast.tone === 'error' ? 'text-red-300' : 'text-mist-100'
+          className={`fixed bottom-4 left-1/2 z-50 flex max-w-[92vw] -translate-x-1/2 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-[17px] shadow-2xl shadow-slate-900/10 glass-strong ${
+            toast.tone === 'error' ? 'text-red-700' : 'text-mist-100'
           }`}
         >
           <span

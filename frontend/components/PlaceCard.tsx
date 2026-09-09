@@ -47,7 +47,7 @@ export default function PlaceCard({
       className={`group shrink-0 cursor-pointer overflow-hidden rounded-2xl border transition duration-200 animate-rise ${
         selected
           ? 'border-aqua-500/50 bg-aqua-500/[0.06] shadow-lg shadow-aqua-500/10'
-          : 'border-white/[0.07] bg-white/[0.025] hover:border-white/15 hover:bg-white/[0.05]'
+          : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-slate-50'
       }`}
     >
       {/* Hero */}
@@ -74,7 +74,7 @@ export default function PlaceCard({
               background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 50) % 360} 40% 12%))`,
             }}
           >
-            <span className="text-4xl font-bold text-white/15">
+            <span className="text-4xl font-bold text-slate-300">
               {place.name.trim().charAt(0).toUpperCase() || '?'}
             </span>
           </div>
@@ -84,11 +84,11 @@ export default function PlaceCard({
         <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/45 to-transparent" />
 
         <div className="absolute left-2.5 top-2.5 flex items-center gap-1.5">
-          <span className="grid h-5 min-w-5 place-items-center rounded-md bg-ink-950/75 px-1.5 text-[10.5px] font-bold tabular-nums text-mist-100 backdrop-blur">
+          <span className="grid h-5 min-w-5 place-items-center rounded-md bg-ink-950/75 px-1.5 text-[15.5px] font-bold tabular-nums text-mist-100 backdrop-blur">
             {index + 1}
           </span>
           {isUltraHd && (
-            <span className="rounded-md bg-ember-500/90 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-ink-950">
+            <span className="rounded-md bg-ember-500/90 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-white">
               Ultra HD
             </span>
           )}
@@ -96,18 +96,18 @@ export default function PlaceCard({
 
         <span
           title={`Quality score ${place.qualityScore}/100`}
-          className="absolute right-2.5 top-2.5 rounded-md bg-ink-950/75 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-mist-200 backdrop-blur"
+          className="absolute right-2.5 top-2.5 rounded-md bg-ink-950/75 px-1.5 py-0.5 text-[15.5px] font-semibold tabular-nums text-mist-200 backdrop-blur"
         >
           {place.qualityScore}
         </span>
 
         <div className="absolute inset-x-0 bottom-0 p-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="rounded-md bg-aqua-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-aqua-300 ring-1 ring-inset ring-aqua-400/25">
+            <span className="rounded-md bg-aqua-500/20 px-1.5 py-0.5 text-[17px] font-semibold uppercase tracking-wide text-aqua-300 ring-1 ring-inset ring-aqua-400/25">
               {place.categoryLabel}
             </span>
             {place.llmProcessed && (
-              <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-medium text-mist-300">
+              <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[17px] font-medium text-mist-300">
                 LLM-cleaned
               </span>
             )}
@@ -116,7 +116,7 @@ export default function PlaceCard({
           <h3
             dir="auto"
             title={place.name}
-            className="mt-1 truncate text-[15px] font-semibold text-balance-tight text-white drop-shadow"
+            className="mt-1 truncate text-[17px] font-semibold text-balance-tight text-white drop-shadow"
           >
             {place.name}
           </h3>
@@ -127,14 +127,14 @@ export default function PlaceCard({
       <div className="px-3 pb-2.5 pt-2.5">
         <p
           dir="auto"
-          className={`text-[12.5px] leading-relaxed text-mist-400 ${expanded ? '' : 'line-clamp-2'}`}
+          className={`text-[17px] leading-relaxed text-mist-400 ${expanded ? '' : 'line-clamp-2'}`}
         >
           {summary}
         </p>
         {isLong && (
           <button
             type="button"
-            className="mt-1 text-[11px] font-semibold text-aqua-400 transition hover:text-aqua-300"
+            className="mt-1 text-[16px] font-semibold text-aqua-400 transition hover:text-aqua-300"
             onClick={(event) => {
               event.stopPropagation();
               setExpanded((open) => !open);
@@ -149,7 +149,7 @@ export default function PlaceCard({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-1.5 border-t border-white/[0.06] px-3 py-2">
+      <div className="flex items-center gap-1.5 border-t border-slate-200 px-3 py-2">
         <button
           type="button"
           disabled={downloading}
@@ -157,7 +157,7 @@ export default function PlaceCard({
             event.stopPropagation();
             onDownload(place);
           }}
-          className="flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-1.5 text-[11.5px] font-semibold text-mist-300 transition hover:border-white/20 hover:bg-white/5 hover:text-mist-100 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-[16px] font-semibold text-mist-300 transition hover:border-slate-400 hover:bg-slate-100 hover:text-mist-100 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {downloading ? (
             <>
@@ -177,11 +177,11 @@ export default function PlaceCard({
         <div className="ml-auto flex items-center gap-0.5">
           {place.wikipediaUrl && (
             <IconLink href={place.wikipediaUrl} label="Wikipedia article">
-              <span className="text-[12px] font-bold leading-none">W</span>
+              <span className="text-[14.5px] font-bold leading-none">W</span>
             </IconLink>
           )}
           <IconLink href={place.osmUrl} label="View on OpenStreetMap">
-            <span className="text-[10px] font-bold leading-none">OSM</span>
+            <span className="text-[17px] font-bold leading-none">OSM</span>
           </IconLink>
         </div>
       </div>
@@ -206,7 +206,7 @@ function IconLink({
       title={label}
       aria-label={label}
       onClick={(event) => event.stopPropagation()}
-      className="grid h-7 min-w-7 place-items-center rounded-lg px-1.5 text-mist-500 transition hover:bg-white/5 hover:text-mist-200"
+      className="grid h-7 min-w-7 place-items-center rounded-lg px-1.5 text-mist-500 transition hover:bg-slate-100 hover:text-mist-200"
     >
       {children}
     </a>
@@ -214,11 +214,11 @@ function IconLink({
 }
 
 const LINK_STYLE: Record<string, string> = {
-  reviews: 'text-emerald-300 hover:bg-emerald-500/15 ring-emerald-400/25',
+  reviews: 'text-emerald-700 hover:bg-emerald-500/15 ring-emerald-400/25',
   tours: 'text-ember-300 hover:bg-ember-500/15 ring-ember-400/25',
-  booking: 'text-sky-300 hover:bg-sky-500/15 ring-sky-400/25',
+  booking: 'text-sky-700 hover:bg-sky-500/15 ring-sky-400/25',
   guide: 'text-violet-300 hover:bg-violet-500/15 ring-violet-400/25',
-  reference: 'text-mist-300 hover:bg-white/10 ring-white/15',
+  reference: 'text-mist-300 hover:bg-slate-200 ring-slate-300',
 };
 
 const LINK_HINT: Record<string, string> = {
@@ -255,8 +255,8 @@ function TravelLinks({ place }: { place: Place }) {
               : `${LINK_HINT[link.kind] ?? 'Open'} — ${link.label}`
           }
           onClick={(event) => event.stopPropagation()}
-          className={`rounded-md px-1.5 py-0.5 text-[10.5px] font-medium ring-1 ring-inset transition ${
-            LINK_STYLE[link.kind] ?? 'text-mist-300 ring-white/10 hover:bg-white/10'
+          className={`rounded-md px-1.5 py-0.5 text-[15.5px] font-medium ring-1 ring-inset transition ${
+            LINK_STYLE[link.kind] ?? 'text-mist-300 ring-slate-300 hover:bg-slate-200'
           }`}
         >
           {link.label} ↗
@@ -315,7 +315,7 @@ function Chip({
   title?: string;
 }) {
   const className =
-    'flex max-w-full items-center gap-1 rounded-md bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] text-mist-400 transition hover:bg-white/[0.09]';
+    'flex max-w-full items-center gap-1 rounded-md bg-slate-50 px-1.5 py-0.5 text-[15.5px] text-mist-400 transition hover:bg-slate-50';
 
   const inner = (
     <>

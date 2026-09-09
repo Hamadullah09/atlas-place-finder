@@ -217,7 +217,11 @@ export interface ResolvedKeyword {
  * against the curated taxonomy win; otherwise we probe the generic keys with
  * the sanitised keyword as a case-insensitive regex.
  */
-export function resolveKeyword(keyword: string): ResolvedKeyword {
+/**
+ * Resolves ONE keyword. Callers should use `resolveKeyword`, which also
+ * understands "all" and comma-separated lists.
+ */
+function resolveSingleKeyword(keyword: string): ResolvedKeyword {
   const normalised = normaliseKeyword(keyword);
   const matched: PlaceCategory[] = [];
 
@@ -266,6 +270,65 @@ export function resolveKeyword(keyword: string): ResolvedKeyword {
     selectors,
     label: toTitleCase(normalised),
   };
+}
+
+/** Words a user types to mean "every kind of place". */
+const ALL_TOKENS = new Set(['all', 'all places', 'everything', 'any', 'anything', 'all types']);
+
+export function isAllKeyword(keyword: string): boolean {
+  return ALL_TOKENS.has(normaliseKeyword(keyword));
+}
+
+/**
+ * Resolves a user keyword into Overpass selectors.
+ *
+ * Three shapes are accepted:
+ *   "museums"                  a single category
+ *   "museums, parks, hotels"   several, combined into one search
+ *   "all"                      every curated category
+ *
+ * Combining categories is a union of their selectors, so one Overpass query
+ * returns all of them rather than issuing a query per type.
+ */
+export function resolveKeyword(keyword: string): ResolvedKeyword {
+  if (isAllKeyword(keyword)) {
+    return {
+      categories: [...CATEGORIES],
+      generic: false,
+      selectors: dedupe(CATEGORIES.flatMap((category) => category.selectors)),
+      label: 'All places',
+    };
+  }
+
+  const parts = keyword
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length <= 1) return resolveSingleKeyword(keyword);
+
+  // Several types at once: union everything, and stay non-generic if any part
+  // matched a curated category, so the caller does not warn about tag probing.
+  const resolved = parts.map(resolveSingleKeyword);
+  const categories = dedupeCategories(resolved.flatMap((entry) => entry.categories));
+
+  return {
+    categories,
+    generic: resolved.every((entry) => entry.generic),
+    selectors: dedupe(resolved.flatMap((entry) => entry.selectors)),
+    label: categories.length > 0
+      ? categories.map((category) => category.label).join(', ')
+      : parts.map(toTitleCase).join(', '),
+  };
+}
+
+function dedupeCategories(categories: PlaceCategory[]): PlaceCategory[] {
+  const seen = new Set<string>();
+  return categories.filter((category) => {
+    if (seen.has(category.id)) return false;
+    seen.add(category.id);
+    return true;
+  });
 }
 
 /** Derives a readable type label from an element's raw OSM tags. */

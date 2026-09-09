@@ -1,6 +1,8 @@
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import type { Writable } from 'node:stream';
 import archiver from 'archiver';
-import { config } from '../config.js';
+import { config, isPackaged } from '../config.js';
 import { mapLimit } from '../lib/concurrency.js';
 import { fetchBuffer } from '../lib/http.js';
 import { createNameDeduper, sanitizePathSegment } from '../lib/sanitize.js';
@@ -21,11 +23,29 @@ let sharpModule: SharpModule | null | undefined;
 
 async function loadSharp(): Promise<SharpModule | null> {
   if (sharpModule !== undefined) return sharpModule;
+
   try {
     sharpModule = (await import('sharp')).default as unknown as SharpModule;
+    return sharpModule;
   } catch {
-    sharpModule = null;
+    // Fall through to the packaged lookup below.
   }
+
+  // Inside the exe the bundle has no node_modules of its own: sharp is a
+  // native module, so it ships as a real folder beside the executable and has
+  // to be required from there by absolute path.
+  if (isPackaged) {
+    try {
+      const beside = path.join(path.dirname(process.execPath), 'node_modules', 'sharp');
+      const requireBeside = createRequire(path.join(path.dirname(process.execPath), 'index.cjs'));
+      sharpModule = requireBeside(beside) as SharpModule;
+      return sharpModule;
+    } catch {
+      // Genuinely unavailable — callers degrade to JPEG passthrough.
+    }
+  }
+
+  sharpModule = null;
   return sharpModule;
 }
 
@@ -143,7 +163,14 @@ export interface ArchiveInput {
 
 export function archiveFilename(input: Pick<ArchiveInput, 'country' | 'city' | 'keyword'>): string {
   const parts = [input.keyword, input.city, input.country]
-    .map((part) => sanitizePathSegment(part, 'export').replace(/\s+/g, '-').toLowerCase())
+    // Commas arrive from multi-type keywords ("museums, parks"). They are legal
+    // in a filename but read badly, so they collapse into the word separator.
+    .map((part) => sanitizePathSegment(part, 'export')
+      .replace(/[,;]+/g, ' ')
+      .replace(/\s+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .toLowerCase())
     .filter(Boolean);
   return `${parts.join('_')}.zip`;
 }
@@ -300,8 +327,10 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
   const sharp = await loadSharp();
   if (!sharp) {
     notes.push(
-      'sharp is not installed, so non-JPEG source images were skipped. '
-        + 'Run `npm install sharp` in the backend to enable format conversion.',
+      'sharp could not be loaded, so non-JPEG source images were skipped. '
+        + (isPackaged
+          ? 'The node_modules folder next to the exe is missing or incomplete.'
+          : 'Run `npm install sharp` in the backend to enable format conversion.'),
     );
   }
 
@@ -318,7 +347,7 @@ function buildReadme(
   notes: string[],
 ): string {
   const lines: string[] = [
-    'Place Finder export',
+    'SMA Place Finder export',
     '===================',
     '',
     `Search      : ${input.keyword}`,

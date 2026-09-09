@@ -23,6 +23,8 @@ export interface BatchRow {
   region: string;
   kind: 'city' | 'province';
   status: BatchRowStatus;
+  /** Per-row cap from the CSV, when the sheet supplied one. */
+  limit?: number;
   placeCount?: number;
   /** Matches dropped because another region in this run already exported them. */
   duplicatesSkipped?: number;
@@ -60,6 +62,8 @@ export interface BatchJobInput {
   limit?: number;
   /** Re-export regions whose ZIP already exists instead of skipping them. */
   overwrite?: boolean;
+  /** Fallback cap from a "Maximum search" column, for rows without one. */
+  sheetMaxSearch?: number;
   /** Allow the same place to be exported under several regions. */
   allowDuplicates?: boolean;
   /** Which engine runs the searches: open-source stack (default) or Google. */
@@ -198,11 +202,14 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
 
     try {
       row.status = 'searching';
+      // Most specific wins: the CSV row, then the sheet, then the job, then
+      // the server ceiling.
+      const rowLimit = row.limit ?? input.sheetMaxSearch ?? input.limit ?? config.maxResults;
       const result = await runSearch({
         keyword: job.attribute,
         city: row.region,
         country: row.country,
-        limit: input.limit ?? config.maxResults,
+        limit: rowLimit,
         includeImages: input.includeImages !== false,
         source: input.source ?? 'osm',
       });
@@ -316,7 +323,7 @@ async function loadState(outputPath: string): Promise<PersistedState | null> {
 /** Plain-text run report dropped next to the exports for later reference. */
 async function writeReport(job: BatchJob): Promise<void> {
   const lines = [
-    'Place Finder batch report',
+    'SMA Place Finder batch report',
     '=========================',
     '',
     `Attribute   : ${job.attribute}`,

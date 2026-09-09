@@ -50,12 +50,12 @@ export default function HeroSearch({
             Research every place of a kind,
             <br className="hidden sm:block" /> in any city on earth
           </h1>
-          <p className="mx-auto mt-2.5 max-w-lg text-[13.5px] leading-relaxed text-mist-400">
+          <p className="mx-auto mt-2.5 max-w-lg text-[16px] leading-relaxed text-mist-400">
             Search once and get a folder of illustrated PDF write-ups you can keep.
           </p>
         </div>
 
-        <div className="mt-7 rounded-2xl border border-white/[0.08] bg-ink-900/60 p-5 shadow-2xl shadow-black/40 backdrop-blur">
+        <div className="mt-7 rounded-2xl border border-slate-200 bg-ink-900/60 p-5 shadow-2xl shadow-slate-900/10 backdrop-blur">
           <SearchForm
             initialValues={initialValues}
             values={values}
@@ -68,22 +68,22 @@ export default function HeroSearch({
 
         <ol className="mt-8 grid gap-4 sm:grid-cols-3">
           {STEPS.map((step) => (
-            <li key={step.n} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
+            <li key={step.n} className="rounded-xl border border-slate-200 bg-slate-50 p-3.5">
               <span
                 aria-hidden
-                className="grid h-6 w-6 place-items-center rounded-full bg-aqua-500/15 text-[12px] font-bold text-aqua-300"
+                className="grid h-6 w-6 place-items-center rounded-full bg-aqua-500/15 text-[14.5px] font-bold text-aqua-300"
               >
                 {step.n}
               </span>
-              <span className="mt-2 block text-[13px] font-medium text-mist-200">{step.title}</span>
-              <span className="mt-1 block text-[11.5px] leading-snug text-mist-500">
+              <span className="mt-2 block text-[15.5px] font-medium text-mist-200">{step.title}</span>
+              <span className="mt-1 block text-[16px] leading-snug text-mist-500">
                 {step.body}
               </span>
             </li>
           ))}
         </ol>
 
-        <p className="mt-6 text-center text-[12px] text-mist-500">
+        <p className="mt-6 text-center text-[14.5px] text-mist-500">
           Got a list of cities?{' '}
           <button
             type="button"

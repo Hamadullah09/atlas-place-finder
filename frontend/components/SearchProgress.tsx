@@ -44,12 +44,12 @@ export default function SearchProgressView({
   const currentIndex = progress ? ORDER.indexOf(progress.stage) : 0;
 
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-ink-900/60 p-4">
+    <div className="rounded-2xl border border-slate-200 bg-ink-900/60 p-4">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-[13px] font-semibold text-mist-100">
+        <p className="text-[15.5px] font-semibold text-mist-100">
           {progress?.message ?? 'Starting…'}
         </p>
-        <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-mist-400">
+        <span className="shrink-0 font-mono text-[16px] tabular-nums text-mist-400">
           {elapsed(startedAt)}
         </span>
       </div>
@@ -66,17 +66,17 @@ export default function SearchProgressView({
                 aria-hidden
                 className={`mt-[3px] grid h-4 w-4 shrink-0 place-items-center rounded-full text-[9px] font-bold ${
                   done
-                    ? 'bg-emerald-500/20 text-emerald-300'
+                    ? 'bg-emerald-500/20 text-emerald-700'
                     : active
                       ? 'bg-aqua-500/20 text-aqua-300'
-                      : 'bg-white/[0.06] text-mist-600'
+                      : 'bg-slate-50 text-mist-600'
                 }`}
               >
                 {done ? '✓' : index + 1}
               </span>
               <span className="min-w-0">
                 <span
-                  className={`block text-[12.5px] font-medium ${
+                  className={`block text-[17px] font-medium ${
                     active ? 'text-aqua-300' : done ? 'text-mist-300' : 'text-mist-500'
                   }`}
                 >
@@ -88,7 +88,7 @@ export default function SearchProgressView({
                   ) : null}
                 </span>
                 {active && (
-                  <span className="block text-[10.5px] leading-snug text-mist-500">{step.hint}</span>
+                  <span className="block text-[15.5px] leading-snug text-mist-500">{step.hint}</span>
                 )}
               </span>
               {active && (
@@ -102,7 +102,7 @@ export default function SearchProgressView({
         })}
       </ol>
 
-      <p className="mt-3 border-t border-white/[0.06] pt-2.5 text-[10.5px] leading-snug text-mist-500">
+      <p className="mt-3 border-t border-slate-200 pt-2.5 text-[15.5px] leading-snug text-mist-500">
         Relevance checking and translation run on your local AI model, so a large
         city can take several minutes. You can leave this running.
       </p>
@@ -110,7 +110,7 @@ export default function SearchProgressView({
       <button
         type="button"
         onClick={onCancel}
-        className="mt-2.5 w-full rounded-xl border border-white/10 px-3 py-1.5 text-[12px] font-semibold text-mist-300 transition hover:border-white/20 hover:bg-white/5"
+        className="mt-2.5 w-full rounded-xl border border-slate-300 px-3 py-1.5 text-[14.5px] font-semibold text-mist-300 transition hover:border-slate-400 hover:bg-slate-100"
       >
         Stop search
       </button>

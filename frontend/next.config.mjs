@@ -5,6 +5,9 @@ const nextConfig = {
   // itself (build-exe.mjs sets NEXT_EXPORT=1). Dev keeps the Next server.
   ...(process.env.NEXT_EXPORT === '1' ? { output: 'export' } : {}),
   images: {
+    // The static export has no image-optimisation server, so the packaged
+    // build serves the files as they are.
+    unoptimized: process.env.NEXT_EXPORT === '1',
     // Ultra-HD source imagery lives on these hosts.
     remotePatterns: [
       { protocol: 'https', hostname: 'upload.wikimedia.org' },

@@ -1,17 +1,19 @@
 /**
- * Builds the two standalone Windows executables:
+ * Builds the standalone Windows executables:
  *
- *   dist-exe/PlaceFinder-OpenSource/PlaceFinder-OpenSource.exe   (PLACE_SOURCE=osm)
- *   dist-exe/PlaceFinder-Google/PlaceFinder-Google.exe           (PLACE_SOURCE=google)
+ *   dist-exe/SMA-Place-Finder/SMA-Place-Finder.exe                (PLACE_SOURCE=osm)
+ *   dist-exe/SMA-Place-Finder-Google/SMA-Place-Finder-Google.exe  (PLACE_SOURCE=google)
  *
- * Each exe embeds Node, the API server and the static frontend; next to it sit
- * an editable .env, a README and (optionally) sharp for image conversion.
+ * Each exe embeds Node, the API server, the static frontend and sharp, so the
+ * folder can be copied to another PC and run with no install step. Next to it
+ * sit an editable .env and a README.
  *
- * Run from the place-finder folder:  node build-exe.mjs [--skip-frontend]
+ * Run from the place-finder folder:
+ *   node build-exe.mjs [--skip-frontend] [--edition=osm|google]
  */
 
 import { execSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +24,40 @@ const stage = path.join(root, 'pkg-stage');
 const distRoot = path.join(root, 'dist-exe');
 
 const skipFrontend = process.argv.includes('--skip-frontend');
+const onlyEdition = process.argv.find((arg) => arg.startsWith('--edition='))?.split('=')[1];
+
+/**
+ * Copies sharp and its dependency closure next to the exe.
+ *
+ * sharp is a native module, so pkg cannot embed it (--external:sharp). Without
+ * it the app still runs but skips every non-JPEG source image, which is most
+ * of Wikimedia. Shipping it means the target PC needs no npm install.
+ */
+function bundleSharp(outDir) {
+  const modules = path.join(backend, "node_modules");
+  const target = path.join(outDir, "node_modules");
+  const copied = new Set();
+
+  function copyPackage(name) {
+    if (copied.has(name)) return;
+    const source = path.join(modules, name);
+    if (!existsSync(source)) return; // optional platform build for another OS
+    copied.add(name);
+
+    cpSync(source, path.join(target, name), { recursive: true });
+
+    const manifest = path.join(source, "package.json");
+    if (!existsSync(manifest)) return;
+    const pkg = JSON.parse(readFileSync(manifest, "utf8"));
+    for (const dep of Object.keys(pkg.dependencies ?? {})) copyPackage(dep);
+    // Only the current platform's binary is installed; the rest are skipped
+    // above, so this stays a Windows-sized copy.
+    for (const dep of Object.keys(pkg.optionalDependencies ?? {})) copyPackage(dep);
+  }
+
+  copyPackage("sharp");
+  console.log(`  bundled sharp + ${copied.size - 1} dependencies`);
+}
 
 function run(command, cwd, env = {}) {
   console.log(`\n> ${command}`);
@@ -63,18 +99,18 @@ cpSync(path.join(frontend, 'out'), path.join(stage, 'web'), { recursive: true })
 // ---------------------------------------------------------------------------
 const EDITIONS = [
   {
-    name: 'PlaceFinder-OpenSource',
+    name: 'SMA-Place-Finder',
     placeSource: 'osm',
-    title: 'Place Finder — Open Source edition',
+    title: 'SMA Place Finder',
     envExtra: [
       '# This edition searches OpenStreetMap / Wikidata / Wikipedia / Wikivoyage.',
       '# No API key is required.',
     ],
   },
   {
-    name: 'PlaceFinder-Google',
+    name: 'SMA-Place-Finder-Google',
     placeSource: 'google',
-    title: 'Place Finder — Google Maps edition',
+    title: 'SMA Place Finder — Google Maps edition',
     envExtra: [
       '# This edition searches with the Google Maps Platform. REQUIRED:',
       '# a key with the Places API and Geocoding API enabled.',
@@ -97,8 +133,10 @@ const ENV_COMMON = [
   '# AI-written PDF articles and English names for non-Latin places.',
   '# A local Ollama is detected automatically — install it from https://ollama.com',
   '# and pull the two recommended models:',
-  '#   ollama pull qwen3:4b     (writing + translation)',
+  '#   ollama pull qwen3:8b     (filtering + writing + translation)',
   '#   ollama pull bge-m3       (embeddings: merges duplicate place names)',
+  '# Whatever is installed is used automatically; qwen3:4b is the smaller',
+  '# fallback for CPU-only machines.',
   '# Nothing below needs filling in for that. Use these only to override the',
   '# choice, or to point at a hosted OpenAI-compatible endpoint instead:',
   '#   LLM_BASE_URL=https://router.huggingface.co/v1',
@@ -127,48 +165,78 @@ function readme(edition) {
     edition.title,
     '='.repeat(edition.title.length),
     '',
-    'Run:',
-    `  1. Double-click ${edition.name}.exe`,
-    '  2. Your browser opens the app automatically (http://localhost:4000,',
-    '     or the next free port if 4000 is taken).',
+    'HOW TO RUN',
+    '----------',
+    `  Double-click ${edition.name}.exe. That is the whole setup.`,
     '',
-    'If Windows shows "Windows protected your PC" (SmartScreen — normal for',
-    'unsigned downloads): click "More info", then "Run anyway".',
+    'Your browser opens the app by itself (http://localhost:4000, or the next',
+    'free port if 4000 is taken). Nothing to install, no account, no key.',
     '',
-    'Keep the black console window open while using the app — closing it',
-    'stops the server. Double-clicking the exe again just reopens the browser.',
+    'If Windows shows "Windows protected your PC" (SmartScreen, which every',
+    'unsigned program gets): click "More info", then "Run anyway".',
     '',
-    'Single search: pick what/where and press Search.',
-    'Batch search : upload a CSV (Country, City, Province/State columns),',
-    '               choose the attribute, a save folder and optional source',
-    '               links — one ZIP of PDFs + photos is saved per region.',
+    'Keep the black console window open while you work - closing it stops the',
+    'app. Double-clicking the exe again just reopens the browser tab.',
     '',
-    'Configuration lives in the .env file next to the exe.',
+    'WHAT YOU NEED',
+    '-------------',
+    'An internet connection. Place data comes from OpenStreetMap and the',
+    'write-ups from Wikipedia, Wikidata and Wikivoyage.',
+    '',
+    'AI IS OPTIONAL AND AUTOMATIC',
+    '----------------------------',
+    'If Ollama (https://ollama.com) is running on the same PC, the app finds it',
+    'on startup and uses it - there is nothing to configure. The console window',
+    'prints which models it picked.',
+    '',
+    'It looks for two kinds of model and uses whichever are installed:',
+    '  - a chat model, for relevance filtering, the PDF articles and English',
+    '    names for non-Latin places. Preferred order: qwen3:8b, qwen3:14b,',
+    '    llama3.1:8b, qwen3:4b, then anything else it finds.',
+    '  - an embedding model, which merges duplicate places across regions.',
+    '    Preferred order: bge-m3, mxbai-embed, nomic-embed, all-minilm.',
+    '',
+    'To add them:',
+    '  ollama pull qwen3:8b',
+    '  ollama pull bge-m3',
+    '',
+    'Without Ollama nothing breaks: searches and exports still work, using text',
+    'assembled straight from the sources instead of AI-written articles.',
+    '',
+    'USING IT',
+    '--------',
+    'Single search: say what and where, then press Search. The type defaults to',
+    '               "all"; the buttons underneath narrow it, and several can be',
+    '               picked at once.',
+    'Batch search : upload a CSV (Country, City, Province/State, and an optional',
+    '               Maximum search column), choose the attribute and a save',
+    '               folder - one ZIP of PDFs and photos is saved per region.',
+    '',
+    'Pick a save folder and the ZIP is written straight into it. Leave it empty',
+    'and the browser downloads it instead.',
+    '',
+    'Settings live in the .env file next to the exe. Nothing in it has to be',
+    'filled in for the app to work.',
     ...(edition.placeSource === 'google'
       ? [
           '',
-          'IMPORTANT: set GOOGLE_MAPS_API_KEY in .env before the first search.',
-          'The key needs the Places API and Geocoding API enabled at',
+          'THIS EDITION NEEDS A KEY',
+          '------------------------',
+          'Set GOOGLE_MAPS_API_KEY in .env before the first search. The key needs the',
+          'Places API and Geocoding API enabled at',
           'https://console.cloud.google.com/apis/library',
         ]
       : []),
     '',
-    'For AI-written PDF articles and English names for non-Latin places,',
-    'install Ollama from https://ollama.com and run:',
-    '  ollama pull qwen3:4b',
-    '  ollama pull bge-m3',
-    'That is all — the app detects a running Ollama on startup and uses both, with',
-    'no configuration. The console window says which models it picked. Without',
-    'them exports still work, using text assembled directly from the sources.',
-    '',
-    'qwen3:4b is the smallest model that reliably holds the article format and',
-    'translates Chinese/Arabic/Cyrillic place names. Smaller models produce',
-    'thin articles and leave some names untranslated.',
-    '',
   ].join('\r\n');
 }
 
-for (const edition of EDITIONS) {
+const selected = onlyEdition
+  ? EDITIONS.filter((edition) => edition.placeSource === onlyEdition)
+  : EDITIONS;
+if (selected.length === 0) throw new Error(`Unknown edition "${onlyEdition}" (use osm or google).`);
+
+for (const edition of selected) {
   console.log(`\n=== Building ${edition.name} ===`);
 
   writeFileSync(
@@ -201,10 +269,10 @@ for (const edition of EDITIONS) {
     stage,
   );
 
+  bundleSharp(outDir);
+
   writeFileSync(path.join(outDir, '.env'), [...ENV_COMMON, ...edition.envExtra, ''].join('\r\n'));
   writeFileSync(path.join(outDir, 'README.txt'), readme(edition));
 }
 
-console.log('\nDone. Editions are in dist-exe\\');
-console.log('Optional (better image conversion): inside each edition folder run');
-console.log('  npm install sharp --no-save --prefix .');
+console.log('\nDone. Copy the folder from dist-exe\\ to the target PC and run the exe.');

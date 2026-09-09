@@ -15,7 +15,9 @@ import { fetchWithPolicy } from '../lib/http.js';
 export const searchRouter = Router();
 
 const searchBodySchema = z.object({
-  keyword: z.string().trim().min(2, 'keyword must be at least 2 characters').max(80),
+  // Accepts "all", one type, or a comma-separated list, so the cap is well
+  // above a single keyword.
+  keyword: z.string().trim().min(2, 'keyword must be at least 2 characters').max(300),
   city: z.string().trim().min(1, 'city is required').max(120),
   country: z.string().trim().min(1, 'country is required').max(120),
   // 0 is accepted as "no limit" and resolves to the server ceiling.

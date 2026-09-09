@@ -100,6 +100,18 @@ export interface DownloadRequest {
   placeIds?: string[];
   includeImages?: boolean;
   includeSummary?: boolean;
+  /** Absolute folder. When set, the server writes the ZIP there instead of
+   *  returning it as a browser download. */
+  savePath?: string;
+}
+
+/** Where the archive ended up, so the UI can say something specific. */
+export interface DownloadOutcome {
+  /** 'saved' means it was written to the operator's folder on this machine. */
+  kind: 'saved' | 'downloaded';
+  filename: string;
+  /** Full path, only for a server-side save. */
+  path?: string;
 }
 
 function filenameFromDisposition(header: string | null, fallback: string): string {
@@ -111,15 +123,18 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
 }
 
 /**
- * Streams the ZIP from the backend and hands it to the browser's downloader.
- * The whole archive is buffered in memory as a Blob — fine for the ~100-place
- * cap the API enforces.
+ * Builds the archive.
+ *
+ * Two outcomes: with a save folder configured the server writes the file
+ * there and we just report the path; without one the ZIP streams back and
+ * the browser downloads it. A web page cannot choose a folder itself, which
+ * is why the server-side path exists at all.
  */
 export async function downloadArchive(
   request: DownloadRequest,
   fallbackName = 'places.zip',
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<DownloadOutcome> {
   const response = await fetch(`${API_BASE_URL}/api/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -128,6 +143,12 @@ export async function downloadArchive(
   });
 
   if (!response.ok) await readError(response);
+
+  // Saved on the server: a small JSON receipt rather than a ZIP stream.
+  if (response.headers.get('content-type')?.includes('application/json')) {
+    const saved = (await response.json()) as { path?: string; filename?: string };
+    return { kind: 'saved', filename: saved.filename ?? fallbackName, path: saved.path };
+  }
 
   const blob = await response.blob();
   const filename = filenameFromDisposition(
@@ -145,7 +166,7 @@ export async function downloadArchive(
   // Revoke on the next tick so Safari has time to start the download.
   setTimeout(() => URL.revokeObjectURL(objectUrl), 2_000);
 
-  return filename;
+  return { kind: 'downloaded', filename };
 }
 
 // ---------------------------------------------------------------------------

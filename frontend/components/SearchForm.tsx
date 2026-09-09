@@ -27,7 +27,24 @@ interface SearchFormProps {
 }
 
 /** One-click starting points, so the first search needs no typing. */
-const QUICK_PICKS = ['tourist places', 'museums', 'historical sites', 'parks', 'universities'];
+export const ALL_PLACES = 'all';
+
+/** Common types, offered as toggles. Several may be picked at once. */
+export const QUICK_PICKS = [
+  'tourist places', 'museums', 'historical sites', 'parks',
+  'universities', 'hospitals', 'hotels', 'restaurants',
+];
+
+/** Splits the comma-separated keyword field into its parts. */
+export function keywordParts(keyword: string): string[] {
+  return keyword.split(',').map((part) => part.trim()).filter(Boolean);
+}
+
+/** Empty counts as "all" - it is the default, not a missing answer. */
+export function isAll(keyword: string): boolean {
+  const value = keyword.trim().toLowerCase();
+  return value.length === 0 || value === ALL_PLACES;
+}
 
 export default function SearchForm({
   initialValues,
@@ -59,8 +76,9 @@ export default function SearchForm({
     setValues((previous) => ({ ...previous, [key]: value }));
   }
 
+  // A blank keyword searches for everything, so it is never a blocker.
+  const keyword = values.keyword.trim() || ALL_PLACES;
   const missing: string[] = [];
-  if (values.keyword.trim().length < 2) missing.push('what to look for');
   if (!values.city.trim()) missing.push('a city');
   if (!values.country.trim()) missing.push('a country');
   const canSubmit = missing.length === 0;
@@ -70,28 +88,24 @@ export default function SearchForm({
       className="space-y-3"
       onSubmit={(event) => {
         event.preventDefault();
-        if (canSubmit && !loading) onSearch(values);
+        if (canSubmit && !loading) onSearch({ ...values, keyword });
       }}
     >
       <div
         className={
           hero
             ? 'space-y-3'
-            : 'space-y-2.5 rounded-2xl border border-white/[0.08] bg-ink-900/60 p-3.5'
+            : 'space-y-2.5 rounded-2xl border border-slate-200 bg-ink-900/60 p-3.5'
         }
       >
         {/* On the hero screen the three inputs read as one sentence across a
             single row; in the sidebar they stack. */}
         <div className={hero ? 'grid gap-2.5 sm:grid-cols-[1.4fr_1fr_1fr]' : 'space-y-2.5'}>
-          <Field
-            label="What are you looking for?"
-            hint={hero ? undefined : 'A kind of place, not a specific one'}
-            big={hero}
-          >
+          <Field label="What are you looking for?" big={hero}>
             <input
               list={listId}
               className={hero ? heroInputClass : inputClass}
-              placeholder="museums"
+              placeholder="all"
               value={values.keyword}
               autoComplete="off"
               onChange={(event) => update('keyword', event.target.value)}
@@ -151,17 +165,37 @@ export default function SearchForm({
         </div>
 
         <div className={`flex flex-wrap gap-1.5 ${hero ? 'justify-center' : ''}`}>
+          <button
+            type="button"
+            onClick={() => update('keyword', ALL_PLACES)}
+            className={`rounded-full border font-semibold transition ${
+              hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
+            } ${
+              isAll(values.keyword)
+                ? 'border-aqua-500 bg-aqua-500 text-white'
+                : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
+            }`}
+          >
+            All places
+          </button>
+
           {QUICK_PICKS.map((pick) => (
             <button
               key={pick}
               type="button"
-              onClick={() => update('keyword', pick)}
+              onClick={() => {
+                const current = isAll(values.keyword) ? [] : keywordParts(values.keyword);
+                const next = current.includes(pick)
+                  ? current.filter((part) => part !== pick)
+                  : [...current, pick];
+                update('keyword', next.length > 0 ? next.join(', ') : ALL_PLACES);
+              }}
               className={`rounded-full border font-medium transition ${
-                hero ? 'px-3 py-1.5 text-[12px]' : 'px-2.5 py-1 text-[11px]'
+                hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
               } ${
-                values.keyword.toLowerCase() === pick
-                  ? 'border-aqua-500/40 bg-aqua-500/15 text-aqua-300'
-                  : 'border-white/[0.07] text-mist-400 hover:border-white/15 hover:text-mist-200'
+                !isAll(values.keyword) && keywordParts(values.keyword).includes(pick)
+                  ? 'border-aqua-500 bg-aqua-500/10 text-aqua-300'
+                  : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
               }`}
             >
               {pick}
@@ -169,37 +203,93 @@ export default function SearchForm({
           ))}
         </div>
 
+        <Field
+          label="Save downloads to"
+          hint="Pick a folder and the ZIP is written straight into it. Leave it empty to download through the browser."
+          big={hero}
+        >
+          <div className="flex gap-1.5">
+            <input
+              type="text"
+              className={hero ? heroInputClass : inputClass}
+              placeholder="Ask me each time"
+              value={values.downloadPath}
+              onChange={(event) => update('downloadPath', event.target.value)}
+            />
+            <button
+              type="button"
+              disabled={browsing}
+              onClick={async () => {
+                setBrowsing(true);
+                setHintVisible(true);
+                try {
+                  const folder = await browseFolder();
+                  if (folder) update('downloadPath', folder);
+                } catch {
+                  // The field can still be typed manually.
+                } finally {
+                  setBrowsing(false);
+                  setHintVisible(false);
+                }
+              }}
+              className={`shrink-0 rounded-xl border border-slate-300 bg-slate-100 font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-200 disabled:opacity-50 ${
+                hero ? 'px-5 text-[17px]' : 'px-3.5 text-[16px]'
+              }`}
+            >
+              {browsing ? 'Choosing…' : 'Choose folder'}
+            </button>
+          </div>
+          {hintVisible && (
+            <span className="mt-1 block text-[15.5px] text-aqua-300">
+              A folder window is open — it may be behind your browser.
+            </span>
+          )}
+        </Field>
+
+        <Field
+          label="Extra source links"
+          hint="Optional. Web pages to read alongside Wikipedia, separated by commas."
+          big={hero}
+        >
+          <textarea
+            className={`${hero ? heroInputClass : inputClass} min-h-[60px] resize-y`}
+            placeholder="https://example.com/city-guide"
+            value={values.extraSources}
+            onChange={(event) => update('extraSources', event.target.value)}
+          />
+        </Field>
+
         <button
           type="submit"
           disabled={!canSubmit || loading}
-          className={`rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 font-semibold text-ink-950 shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none ${
-            hero ? 'mx-auto block w-full max-w-xs px-6 py-3 text-[15px]' : 'w-full px-4 py-2.5 text-[13.5px]'
+          className={`rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 font-semibold text-white shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none ${
+            hero ? 'mx-auto block w-full max-w-xs px-6 py-3 text-[17px]' : 'w-full px-4 py-2.5 text-[16px]'
           }`}
         >
           {loading ? 'Searching…' : 'Search'}
         </button>
 
         {!canSubmit && (
-          <p className={`text-center text-mist-500 ${hero ? 'text-[12px]' : 'text-[10.5px]'}`}>
+          <p className={`text-center text-mist-500 ${hero ? 'text-[14.5px]' : 'text-[15.5px]'}`}>
             Enter {missing.join(' and ')} to search.
           </p>
         )}
       </div>
 
       {/* Advanced — collapsed by default so the common path stays three fields */}
-      <div className="rounded-2xl border border-white/[0.08] bg-ink-900/40">
+      <div className="rounded-2xl border border-slate-200 bg-ink-900/40">
         <button
           type="button"
           onClick={() => setShowAdvanced((open) => !open)}
           aria-expanded={showAdvanced}
-          className="flex w-full items-center justify-between px-3.5 py-2.5 text-[12px] font-semibold text-mist-300 transition hover:text-mist-100"
+          className="flex w-full items-center justify-between px-3.5 py-2.5 text-[14.5px] font-semibold text-mist-300 transition hover:text-mist-100"
         >
           <span>Options</span>
           <span aria-hidden className={`transition ${showAdvanced ? 'rotate-180' : ''}`}>⌄</span>
         </button>
 
         {showAdvanced && (
-          <div className="space-y-3 border-t border-white/[0.06] p-3.5">
+          <div className="space-y-3 border-t border-slate-200 p-3.5">
             <Field
               label="Max results"
               hint="Blank means every place found. Each is researched separately, so large cities take longer."
@@ -211,55 +301,6 @@ export default function SearchForm({
                 placeholder="All"
                 value={values.limit === 0 ? '' : values.limit}
                 onChange={(event) => update('limit', Number(event.target.value) || 0)}
-              />
-            </Field>
-
-            <Field label="Save downloads to" hint="Where the ZIP is written">
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  className={inputClass}
-                  placeholder="Ask me each time"
-                  value={values.downloadPath}
-                  onChange={(event) => update('downloadPath', event.target.value)}
-                />
-                <button
-                  type="button"
-                  disabled={browsing}
-                  onClick={async () => {
-                    setBrowsing(true);
-                    setHintVisible(true);
-                    try {
-                      const folder = await browseFolder();
-                      if (folder) update('downloadPath', folder);
-                    } catch {
-                      // The field can still be typed manually.
-                    } finally {
-                      setBrowsing(false);
-                      setHintVisible(false);
-                    }
-                  }}
-                  className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-2.5 text-[11.5px] font-semibold text-mist-200 transition hover:border-white/20 hover:bg-white/10 disabled:opacity-50"
-                >
-                  {browsing ? '…' : 'Browse'}
-                </button>
-              </div>
-              {hintVisible && (
-                <span className="mt-1 block text-[10.5px] text-aqua-300">
-                  A folder window is open — it may be behind your browser.
-                </span>
-              )}
-            </Field>
-
-            <Field
-              label="Extra source links"
-              hint="Optional pages to read alongside Wikipedia, comma separated"
-            >
-              <textarea
-                className={`${inputClass} min-h-[60px] resize-y`}
-                placeholder="https://example.com/city-guide"
-                value={values.extraSources}
-                onChange={(event) => update('extraSources', event.target.value)}
               />
             </Field>
 
@@ -283,11 +324,11 @@ export default function SearchForm({
 }
 
 const inputClass =
-  'w-full rounded-lg border border-white/[0.08] bg-ink-950/70 px-2.5 py-2 text-[13px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
+  'w-full rounded-lg border border-slate-200 bg-ink-950/70 px-2.5 py-2 text-[15.5px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
 
 /** Larger, roomier inputs for the first-run screen. */
 const heroInputClass =
-  'w-full rounded-xl border border-white/[0.1] bg-ink-950/70 px-3.5 py-3 text-[15px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
+  'w-full rounded-xl border border-slate-300 bg-ink-950/70 px-3.5 py-3 text-[17px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
 
 function Field({
   label,
@@ -303,12 +344,12 @@ function Field({
   return (
     <label className="block">
       <span
-        className={`mb-1 block font-semibold text-mist-300 ${big ? 'text-[12px]' : 'text-[11px]'}`}
+        className={`mb-1 block font-semibold text-mist-300 ${big ? 'text-[14.5px]' : 'text-[16px]'}`}
       >
         {label}
       </span>
       {children}
-      {hint && <span className="mt-1 block text-[10.5px] leading-snug text-mist-500">{hint}</span>}
+      {hint && <span className="mt-1 block text-[15.5px] leading-snug text-mist-500">{hint}</span>}
     </label>
   );
 }
@@ -344,8 +385,8 @@ function Toggle({
         />
       </span>
       <span className="min-w-0">
-        <span className="block text-[12px] font-medium text-mist-100">{label}</span>
-        <span className="block text-[10.5px] leading-snug text-mist-500">{hint}</span>
+        <span className="block text-[14.5px] font-medium text-mist-100">{label}</span>
+        <span className="block text-[15.5px] leading-snug text-mist-500">{hint}</span>
       </span>
     </button>
   );

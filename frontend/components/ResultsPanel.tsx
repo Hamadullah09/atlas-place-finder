@@ -16,6 +16,8 @@ interface ResultsPanelProps {
   onSelect: (place: Place) => void;
   onDownloadPlace: (place: Place) => void;
   onDownloadAll: () => void;
+  /** Set when the operator chose a folder — changes the wording and icon. */
+  savePath?: string;
 }
 
 export default function ResultsPanel({
@@ -28,6 +30,7 @@ export default function ResultsPanel({
   onSelect,
   onDownloadPlace,
   onDownloadAll,
+  savePath,
 }: ResultsPanelProps) {
   const [sortKey, setSortKey] = useState<SortKey>('quality');
   const [onlyWithImages, setOnlyWithImages] = useState(false);
@@ -62,7 +65,7 @@ export default function ResultsPanel({
             {result.area.city}
           </h2>
         </div>
-        <p className="mt-0.5 truncate text-[11px] text-mist-500" title={result.area.displayName}>
+        <p className="mt-0.5 truncate text-[16px] text-mist-500" title={result.area.displayName}>
           {result.area.displayName}
         </p>
 
@@ -78,14 +81,14 @@ export default function ResultsPanel({
 
         {result.stats.warnings.length > 0 && (
           <details className="group mt-2 rounded-xl border border-ember-500/20 bg-ember-500/[0.07] px-2.5 py-1.5">
-            <summary className="cursor-pointer list-none text-[11px] font-medium text-ember-300 marker:hidden">
+            <summary className="cursor-pointer list-none text-[16px] font-medium text-ember-300 marker:hidden">
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-ember-400" />
                 {result.stats.warnings.length} note
                 {result.stats.warnings.length === 1 ? '' : 's'} about this search
               </span>
             </summary>
-            <ul className="mt-1.5 space-y-1 border-t border-ember-500/15 pt-1.5 text-[10.5px] leading-relaxed text-ember-300/75">
+            <ul className="mt-1.5 space-y-1 border-t border-ember-500/15 pt-1.5 text-[15.5px] leading-relaxed text-ember-300/75">
               {result.stats.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
@@ -94,36 +97,47 @@ export default function ResultsPanel({
         )}
       </div>
 
-      {/* Toolbar */}
-      <div className="flex shrink-0 items-center gap-1.5 border-y border-white/[0.06] py-2">
+      {/* Primary action, on its own row so it cannot be mistaken for a filter. */}
+      <div className="shrink-0 pt-3">
         <button
           type="button"
           onClick={onDownloadAll}
           disabled={downloadingAll || result.places.length === 0}
-          className="flex items-center gap-1.5 rounded-lg bg-mist-50 px-2.5 py-1.5 text-[11.5px] font-semibold text-ink-950 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-ink-700 disabled:text-mist-500"
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-aqua-500 px-4 py-3 text-[17px] font-semibold text-white shadow-md transition hover:bg-aqua-600 disabled:cursor-not-allowed disabled:bg-ink-700 disabled:text-mist-500 disabled:shadow-none"
         >
           {downloadingAll ? (
             <>
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              Building ZIP…
+              Preparing your files…
             </>
           ) : (
             <>
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
                 <path fill="currentColor" d="M12 3v10.6l3.3-3.3 1.4 1.4L12 17.4l-4.7-5.7 1.4-1.4L12 13.6V3Zm-7 16h14v2H5Z" />
               </svg>
-              Download all ({result.places.length})
+              {savePath
+                ? `Save all ${result.places.length} to my folder`
+                : `Download all ${result.places.length}`}
             </>
           )}
         </button>
 
+        {savePath && (
+          <p className="mt-1.5 text-center text-[13px] text-mist-500">
+            Files are saved to {savePath}
+          </p>
+        )}
+      </div>
+
+      {/* Filters and sorting */}
+      <div className="flex shrink-0 items-center gap-2 border-y border-slate-200 py-2.5">
         <button
           type="button"
           onClick={() => setOnlyWithImages((on) => !on)}
-          className={`rounded-lg border px-2 py-1.5 text-[11px] font-medium transition ${
+          className={`rounded-lg border px-2 py-1.5 text-[16px] font-medium transition ${
             onlyWithImages
               ? 'border-aqua-500/40 bg-aqua-500/15 text-aqua-300'
-              : 'border-white/[0.07] text-mist-400 hover:border-white/15 hover:text-mist-200'
+              : 'border-slate-200 text-mist-400 hover:border-slate-300 hover:text-mist-200'
           }`}
         >
           With photos
@@ -133,7 +147,7 @@ export default function ResultsPanel({
           value={sortKey}
           onChange={(event) => setSortKey(event.target.value as SortKey)}
           aria-label="Sort results"
-          className="ml-auto rounded-lg border border-white/[0.07] bg-ink-850 px-2 py-1.5 text-[11px] font-medium text-mist-300 outline-none transition hover:border-white/15 focus:border-aqua-500/50"
+          className="ml-auto rounded-lg border border-slate-200 bg-ink-850 px-2 py-1.5 text-[16px] font-medium text-mist-300 outline-none transition hover:border-slate-300 focus:border-aqua-500/50"
         >
           <option value="quality">Best match</option>
           <option value="name">Name A→Z</option>
@@ -142,9 +156,9 @@ export default function ResultsPanel({
       </div>
 
       {downloadingAll && (
-        <p className="mt-2 shrink-0 rounded-xl bg-white/[0.04] px-2.5 py-2 text-[10.5px] leading-relaxed text-mist-400">
+        <p className="mt-2 shrink-0 rounded-xl bg-slate-50 px-2.5 py-2 text-[15.5px] leading-relaxed text-mist-400">
           Fetching source images, rendering one PDF per place, and zipping into{' '}
-          <code className="rounded bg-black/40 px-1 text-aqua-300">
+          <code className="rounded bg-slate-100/40 px-1 text-aqua-300">
             {result.area.country}/{result.area.city}/…
           </code>{' '}
           — keep this tab open.
@@ -153,8 +167,8 @@ export default function ResultsPanel({
 
       {/* List */}
       {places.length === 0 ? (
-        <div className="mt-6 rounded-2xl border border-dashed border-white/10 px-4 py-8 text-center">
-          <p className="text-[13px] text-mist-400">
+        <div className="mt-6 rounded-2xl border border-dashed border-slate-300 px-4 py-8 text-center">
+          <p className="text-[15.5px] text-mist-400">
             {onlyWithImages
               ? 'No results have photos.'
               : `Nothing matching “${result.query.keyword}” in ${result.area.city}.`}
@@ -163,7 +177,7 @@ export default function ResultsPanel({
             <button
               type="button"
               onClick={() => setOnlyWithImages(false)}
-              className="mt-2 text-[12px] font-semibold text-aqua-400 hover:text-aqua-300"
+              className="mt-2 text-[14.5px] font-semibold text-aqua-400 hover:text-aqua-300"
             >
               Show all results
             </button>
@@ -197,8 +211,8 @@ function shortModel(model: string | undefined): string {
 function Stat({ value, label, accent }: { value: string; label: string; accent?: boolean }) {
   return (
     <span
-      className={`flex items-baseline gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] ${
-        accent ? 'bg-aqua-500/12 text-aqua-300' : 'bg-white/[0.05] text-mist-400'
+      className={`flex items-baseline gap-1 rounded-md px-1.5 py-0.5 text-[15.5px] ${
+        accent ? 'bg-aqua-500/12 text-aqua-300' : 'bg-slate-50 text-mist-400'
       }`}
     >
       <span className="font-semibold tabular-nums">{value}</span>
@@ -212,14 +226,14 @@ function EmptyState() {
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 text-center">
       <span
         aria-hidden
-        className="grid h-14 w-14 place-items-center rounded-2xl border border-white/[0.07] bg-white/[0.03] text-2xl"
+        className="grid h-14 w-14 place-items-center rounded-2xl border border-slate-200 bg-slate-50 text-2xl"
       >
         🧭
       </span>
       <h2 className="mt-3.5 text-[16px] font-semibold tracking-tight text-mist-100">
         Search anywhere on earth
       </h2>
-      <p className="mt-1.5 max-w-[280px] text-[12.5px] leading-relaxed text-mist-500">
+      <p className="mt-1.5 max-w-[280px] text-[17px] leading-relaxed text-mist-500">
         Search for places anywhere on earth. Results come from OpenStreetMap and are exported with rich image and PDF support.
       </p>
     </div>
@@ -229,13 +243,13 @@ function EmptyState() {
 function ErrorState({ message }: { message: string }) {
   return (
     <div className="rounded-2xl border border-red-500/25 bg-red-500/[0.07] p-4">
-      <p className="flex items-center gap-2 text-[13px] font-semibold text-red-300">
-        <span className="grid h-5 w-5 place-items-center rounded-full bg-red-500/20 text-[11px]">
+      <p className="flex items-center gap-2 text-[15.5px] font-semibold text-red-700">
+        <span className="grid h-5 w-5 place-items-center rounded-full bg-red-500/20 text-[16px]">
           !
         </span>
         Search failed
       </p>
-      <p className="mt-1.5 text-[11.5px] leading-relaxed text-red-200/70">{message}</p>
+      <p className="mt-1.5 text-[16px] leading-relaxed text-red-700/80">{message}</p>
     </div>
   );
 }
@@ -255,7 +269,7 @@ function ResultsSkeleton() {
         {Array.from({ length: 4 }).map((_, index) => (
           <div
             key={index}
-            className="shrink-0 overflow-hidden rounded-2xl border border-white/[0.06]"
+            className="shrink-0 overflow-hidden rounded-2xl border border-slate-200"
           >
             <div className="skeleton aspect-[16/9] w-full" />
             <div className="space-y-2 p-3">
