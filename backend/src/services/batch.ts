@@ -154,9 +154,13 @@ export async function startBatchJob(input: BatchJobInput): Promise<BatchJob> {
   for (const [id] of finished.slice(0, Math.max(0, finished.length - 5))) jobs.delete(id);
 
   void runJob(active, input).catch((error) => {
-    job.status = 'failed';
+    job.status = isCancellation(error) ? 'cancelled' : 'failed';
     job.finishedAt = new Date().toISOString();
-    job.notes.push(`Job crashed: ${error instanceof Error ? error.message : String(error)}`);
+    job.currentIndex = -1;
+    if (!isCancellation(error)) {
+      job.notes.push(`Job crashed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (runningJobId === job.id) runningJobId = null;
   });
 
   return job;

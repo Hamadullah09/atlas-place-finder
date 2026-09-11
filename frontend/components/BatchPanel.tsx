@@ -113,6 +113,12 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
       setJob(started);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+
+      // Most likely cause: a run from another tab or an earlier session is
+      // still going. Adopt it so the operator can watch or cancel it here
+      // instead of being told "already running" with nothing on screen.
+      const running = await fetchRunningBatchJob().catch(() => null);
+      if (running) setJob(running);
     } finally {
       setStarting(false);
     }
