@@ -42,6 +42,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
   const [browsing, setBrowsing] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [hintVisible, setHintVisible] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
@@ -142,12 +143,18 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
 
   const handleCancel = useCallback(async () => {
     if (!job) return;
+    setCancelling(true);
     try {
       await cancelBatch(job.id);
     } catch {
       // Already finished — the next poll will reflect that.
     }
   }, [job]);
+
+  // Reset once the server confirms the job is no longer running.
+  useEffect(() => {
+    if (job?.status !== 'running') setCancelling(false);
+  }, [job?.status]);
 
   const progress = useMemo(() => {
     if (!job) return null;
@@ -384,15 +391,16 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             disabled={!canStart}
             className="rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 px-4 py-2 text-[15.5px] font-semibold text-white shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none"
           >
-            {starting ? 'Starting…' : running ? 'Batch running…' : 'Start batch'}
+            {starting ? 'Starting…' : cancelling ? 'Stopping after this place…' : running ? 'Batch running…' : 'Start batch'}
           </button>
           {running && (
             <button
               type="button"
               onClick={() => void handleCancel()}
-              className="rounded-xl border border-slate-300 px-3.5 py-2 text-[17px] font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-100"
+              disabled={cancelling}
+              className="rounded-xl border border-slate-300 px-3.5 py-2 text-[17px] font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Cancel
+              {cancelling ? 'Stopping…' : 'Cancel'}
             </button>
           )}
         </div>
@@ -442,10 +450,11 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
               return (
                 <li
                   key={`${row.country}-${row.kind}-${row.region}`}
-                  className={`flex items-baseline justify-between gap-2 rounded-lg px-2 py-1 ${
+                  className={`rounded-lg px-2 py-1 ${
                     active ? 'bg-aqua-500/10 ring-1 ring-aqua-500/30' : ''
                   }`}
                 >
+                  <div className="flex items-baseline justify-between gap-2">
                   <span className="truncate text-mist-200">
                     {row.region}
                     <span className="text-mist-500"> · {row.country}</span>
@@ -468,6 +477,21 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                       ? `${row.placeCount} places${row.duplicatesSkipped ? ` (+${row.duplicatesSkipped} dup)` : ''}`
                       : meta.label}
                   </span>
+                  </div>
+
+                  {active && row.progress && (
+                    <p className="mt-0.5 truncate text-[13.5px] text-aqua-700">
+                      {row.progress.message}
+                      {row.progress.total !== undefined && (
+                        <span className="text-mist-500">
+                          {' '}
+                          {row.progress.done !== undefined
+                            ? `${row.progress.done} of ${row.progress.total}`
+                            : `${row.progress.total} found`}
+                        </span>
+                      )}
+                    </p>
+                  )}
                 </li>
               );
             })}

@@ -3,10 +3,12 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
+import { isCancellation, runCancellable } from '../lib/cancel.js';
 import type { BatchTarget } from '../lib/csv.js';
 import { sanitizePathSegment } from '../lib/sanitize.js';
 import { streamPlacesArchive } from './archive.js';
 import { fetchExtraSources, type ExtraSourceDoc } from './extraSources.js';
+import { createProgress, type SearchProgress } from './progress.js';
 import { runSearch } from './search.js';
 
 /**
@@ -30,6 +32,8 @@ export interface BatchRow {
   duplicatesSkipped?: number;
   zipPath?: string;
   error?: string;
+  /** Live stage while this row is in flight; cleared once it settles. */
+  progress?: SearchProgress;
 }
 
 export type BatchJobStatus = 'running' | 'completed' | 'cancelled' | 'failed';
@@ -73,6 +77,8 @@ export interface BatchJobInput {
 interface ActiveJob {
   job: BatchJob;
   cancelRequested: boolean;
+  /** Aborted by cancelBatchJob so the current row stops mid-flight. */
+  controller: AbortController;
 }
 
 /** Single-user tool — one live job, and the last few kept for the UI. */
@@ -91,6 +97,9 @@ export function cancelBatchJob(id: string): boolean {
   const active = jobs.get(id);
   if (!active || active.job.status !== 'running') return false;
   active.cancelRequested = true;
+  // Without this the flag is only read between rows, so a cancel during a
+  // large export waited for the whole city to finish.
+  active.controller.abort();
   return true;
 }
 
@@ -136,7 +145,7 @@ export async function startBatchJob(input: BatchJobInput): Promise<BatchJob> {
     }
   }
 
-  const active: ActiveJob = { job, cancelRequested: false };
+  const active: ActiveJob = { job, cancelRequested: false, controller: new AbortController() };
   jobs.set(job.id, active);
   runningJobId = job.id;
 
@@ -202,17 +211,21 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
 
     try {
       row.status = 'searching';
+      row.progress = createProgress();
       // Most specific wins: the CSV row, then the sheet, then the job, then
       // the server ceiling.
       const rowLimit = row.limit ?? input.sheetMaxSearch ?? input.limit ?? config.maxResults;
-      const result = await runSearch({
-        keyword: job.attribute,
-        city: row.region,
-        country: row.country,
-        limit: rowLimit,
-        includeImages: input.includeImages !== false,
-        source: input.source ?? 'osm',
-      });
+      const result = await runCancellable(active.controller.signal, () => runSearch(
+        {
+          keyword: job.attribute,
+          city: row.region,
+          country: row.country,
+          limit: rowLimit,
+          includeImages: input.includeImages !== false,
+          source: input.source ?? 'osm',
+        },
+        { signal: active.controller.signal, progress: row.progress },
+      ));
 
       // Province rows overlap the city rows beneath them, so the same place is
       // otherwise exported (and researched, and photographed) several times.
@@ -248,7 +261,7 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
       await ensureWritableDirectory(targetDir);
 
       const out = createWriteStream(partPath);
-      await streamPlacesArchive(out, {
+      await runCancellable(active.controller.signal, () => streamPlacesArchive(out, {
         country: row.country,
         city: row.region,
         keyword: job.attribute,
@@ -259,8 +272,10 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
           includeSummary: true,
           detailedWriteups: input.detailedWriteups !== false,
           extraDocs,
+          signal: active.controller.signal,
+          progress: row.progress,
         },
-      });
+      }));
 
       // Only now is the archive complete — publish it under its real name.
       await rm(zipPath, { force: true }).catch(() => undefined);
@@ -269,9 +284,18 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
       job.exportedPlaceIds.push(...fresh.map((place) => place.id));
       row.status = 'done';
       row.zipPath = zipPath;
+      row.progress = undefined;
       await saveState(job);
     } catch (error) {
       await rm(partPath, { force: true }).catch(() => undefined);
+
+      if (active.cancelRequested || isCancellation(error)) {
+        row.status = 'pending';
+        job.status = 'cancelled';
+        job.notes.push(`${row.region}, ${row.country}: stopped part-way; nothing was written.`);
+        break;
+      }
+
       row.status = 'failed';
       row.error = error instanceof Error ? error.message : String(error);
       job.notes.push(`${row.region}, ${row.country}: ${row.error}`);

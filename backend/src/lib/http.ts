@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { cancelSignal } from './cancel.js';
 
 export class HttpError extends Error {
   constructor(
@@ -57,11 +58,19 @@ export async function fetchWithPolicy(url: string, options: FetchOptions = {}): 
   const { timeoutMs = 30_000, retries = 2, skipThrottle = false, headers, ...rest } = options;
   const host = new URL(url).host;
 
+  // Cancelling a batch has to reach the request in flight, not just the gap
+  // between requests: an image download has a 45s timeout and an LLM call
+  // three minutes.
+  const cancel = cancelSignal();
+
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
+    cancel?.throwIfAborted();
+
     if (!skipThrottle) {
       const wait = reserveSlot(host);
       if (wait > 0) await sleep(wait);
+      cancel?.throwIfAborted();
     }
 
     try {
@@ -72,7 +81,9 @@ export async function fetchWithPolicy(url: string, options: FetchOptions = {}): 
           'Accept-Language': 'en',
           ...(headers ?? {}),
         },
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: cancel
+          ? AbortSignal.any([AbortSignal.timeout(timeoutMs), cancel])
+          : AbortSignal.timeout(timeoutMs),
       });
 
       if (RETRYABLE_STATUS.has(response.status) && attempt < retries) {
@@ -97,6 +108,7 @@ export async function fetchWithPolicy(url: string, options: FetchOptions = {}): 
       return response;
     } catch (error) {
       lastError = error;
+      if (cancel?.aborted) throw cancel.reason;
       // A non-retryable HTTP error should surface immediately.
       if (error instanceof HttpError && !RETRYABLE_STATUS.has(error.status)) throw error;
       if (attempt === retries) break;

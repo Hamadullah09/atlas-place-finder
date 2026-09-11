@@ -10,6 +10,7 @@ import { fetchContentForPlaces } from './content.js';
 import { excerptsForPlace, type ExtraSourceDoc } from './extraSources.js';
 import { isAllowedImageUrl, notifyUnsplashDownload } from './images.js';
 import { renderPlacePdf, renderSummaryPdf, type PdfImageAsset } from './pdf.js';
+import { setStage, type SearchProgress } from './progress.js';
 import { generateWriteups } from './writeup.js';
 import type { Place, PlaceContent, PlaceWriteup, SearchResult } from '../types.js';
 
@@ -148,6 +149,14 @@ export interface ArchiveOptions {
    * export, so it defaults on.
    */
   detailedWriteups?: boolean;
+  /**
+   * Abandons the archive between places. One place costs a research pass, a
+   * handful of image downloads and a PDF render, so this bounds how long a
+   * cancel waits to roughly one place.
+   */
+  signal?: AbortSignal;
+  /** Reports the export phases, so a long archive is not a blank wait. */
+  progress?: SearchProgress;
   /** User-supplied source pages, mined for passages that mention each place. */
   extraDocs?: ExtraSourceDoc[];
 }
@@ -227,8 +236,11 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
   let contentByPlace = new Map<string, PlaceContent>();
   let writeupByPlace = new Map<string, PlaceWriteup>();
 
+  options.signal?.throwIfAborted();
+
   if (options.detailedWriteups !== false) {
     try {
+      setStage(options.progress, 'researching', { total: places.length });
       contentByPlace = await fetchContentForPlaces(places);
 
       const extraDocs = options.extraDocs ?? [];
@@ -252,6 +264,7 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
         if (content) place.content = content;
       }
 
+      setStage(options.progress, 'writing', { total: places.length });
       const outcome = await generateWriteups(places, contentByPlace);
       writeupByPlace = outcome.writeups;
       notes.push(...outcome.notes);
@@ -269,7 +282,17 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
 
   const dedupeFolder = createNameDeduper();
 
+  let packaged = 0;
+
   for (const place of places) {
+    options.signal?.throwIfAborted();
+    setStage(options.progress, 'packaging', {
+      done: packaged,
+      total: places.length,
+      message: `Building ${place.name}`,
+    });
+    packaged += 1;
+
     const safeName = dedupeFolder(sanitizePathSegment(place.name, `place-${place.osmId}`));
     const placeDir = `${cityRoot}/${safeName}`;
 

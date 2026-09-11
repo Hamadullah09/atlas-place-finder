@@ -38,6 +38,11 @@ export interface RunSearchOptions {
   refresh?: boolean;
   /** Receives stage updates so a long search can show live progress. */
   progress?: SearchProgress;
+  /**
+   * Abandons the search at the next stage boundary. A whole-city search
+   * runs for minutes, so a batch cancel has to be able to interrupt it.
+   */
+  signal?: AbortSignal;
 }
 
 /**
@@ -84,11 +89,13 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     );
   }
 
+  options.signal?.throwIfAborted();
   setStage(options.progress, 'geocoding', { message: `Locating ${city}, ${country}` });
   const area = await geocodeCity(city, country);
 
   // Overpass is the primary source; Wikidata and Nominatim run alongside it to
   // catch landmarks that are notable but thinly mapped in OSM.
+  options.signal?.throwIfAborted();
   setStage(options.progress, 'discovering');
   const [overpassResult, wikidataPlaces, nominatimPlaces] = await Promise.all([
     searchOverpass(resolved, area, limit),
@@ -122,6 +129,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
 
   // Give non-Latin names an English form before anything downstream uses them:
   // the LLM filter, the image queries and the PDF all read `place.name`.
+  options.signal?.throwIfAborted();
   setStage(options.progress, 'naming', { total: candidates.length });
   const naming = await applyEnglishNames(candidates).catch(() => ({ translated: 0, note: undefined }));
   if (naming.note) warnings.push(naming.note);
@@ -136,6 +144,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   if (semantic.note) warnings.push(semantic.note);
   const named = semantic.places;
 
+  options.signal?.throwIfAborted();
   setStage(options.progress, 'filtering', {
     total: named.length,
     message: `Checking ${named.length} places are relevant`,
@@ -151,6 +160,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
 
   let imagesByPlace = new Map<string, PlaceImage[]>();
   if (includeImages && kept.length > 0) {
+    options.signal?.throwIfAborted();
     setStage(options.progress, 'imagery', {
       total: kept.length,
       message: `Finding photographs for ${kept.length} places`,

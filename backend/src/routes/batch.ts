@@ -73,10 +73,16 @@ let pickerOpen = false;
  */
 const PICKER_SCRIPT = `
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
+Add-Type -AssemblyName System.Drawing | Out-Null
 Add-Type -Name W -Namespace Native -MemberDefinition '
 [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+[DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr p);
+[DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
 '
 $console = [Native.W]::GetConsoleWindow()
 if ($console -ne [IntPtr]::Zero) { [Native.W]::ShowWindow($console, 0) | Out-Null }
@@ -84,9 +90,28 @@ if ($console -ne [IntPtr]::Zero) { [Native.W]::ShowWindow($console, 0) | Out-Nul
 $owner = New-Object System.Windows.Forms.Form
 $owner.TopMost = $true
 $owner.ShowInTaskbar = $false
-$owner.Opacity = 0
+# A 1x1 window off-screen rather than a zero-opacity one: Windows will not
+# hand the foreground to a window it considers invisible.
+$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$owner.Size = New-Object System.Drawing.Size 1, 1
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+$owner.Location = New-Object System.Drawing.Point -32000, -32000
 $owner.Show()
+$owner.Activate()
+[System.Windows.Forms.Application]::DoEvents()
+
+# Borrow the foreground window thread so the foreground lock does not apply.
+$fg = [Native.W]::GetForegroundWindow()
+$fgThread = [Native.W]::GetWindowThreadProcessId($fg, [IntPtr]::Zero)
+$myThread = [Native.W]::GetCurrentThreadId()
+$attached = $false
+if ($fgThread -ne 0 -and $fgThread -ne $myThread) {
+  $attached = [Native.W]::AttachThreadInput($fgThread, $myThread, $true)
+}
+[Native.W]::BringWindowToTop($owner.Handle) | Out-Null
 [Native.W]::SetForegroundWindow($owner.Handle) | Out-Null
+if ($attached) { [Native.W]::AttachThreadInput($fgThread, $myThread, $false) | Out-Null }
+[System.Windows.Forms.Application]::DoEvents()
 
 $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
 $dlg.Description = 'Choose where SMA Place Finder saves the batch ZIP files'

@@ -16,6 +16,9 @@ export type SearchStage =
   | 'naming'
   | 'filtering'
   | 'imagery'
+  | 'researching'
+  | 'writing'
+  | 'packaging'
   | 'done'
   | 'failed';
 
@@ -39,6 +42,9 @@ const STAGE_LABEL: Record<SearchStage, string> = {
   naming: 'Translating place names into English',
   filtering: 'Checking each place is relevant',
   imagery: 'Finding photographs',
+  researching: 'Reading Wikipedia, Wikidata and Wikivoyage',
+  writing: 'Writing the articles',
+  packaging: 'Building the PDFs and photos',
   done: 'Done',
   failed: 'Failed',
 };

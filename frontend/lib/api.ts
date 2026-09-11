@@ -193,6 +193,13 @@ export interface BatchRow {
   duplicatesSkipped?: number;
   zipPath?: string;
   error?: string;
+  /** Live stage while this row runs; absent once it settles. */
+  progress?: {
+    stage: SearchStage;
+    message: string;
+    done?: number;
+    total?: number;
+  };
 }
 
 export interface BatchJob {
