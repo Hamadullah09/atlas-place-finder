@@ -20,15 +20,32 @@ dotenv.config({ path: path.join(envDir, '.env') });
  * Each packaged edition ships an `edition.json` inside its snapshot that pins
  * the engine ('osm' or 'google'). Environment variables still win.
  */
-function editionDefault(): string {
+interface EditionFile {
+  placeSource?: string;
+  builtAt?: string;
+  commit?: string;
+}
+
+function readEdition(): EditionFile {
   try {
-    const raw = readFileSync(path.join(moduleDir, 'edition.json'), 'utf8');
-    const parsed = JSON.parse(raw) as { placeSource?: string };
-    return typeof parsed.placeSource === 'string' ? parsed.placeSource : 'both';
+    return JSON.parse(readFileSync(path.join(moduleDir, 'edition.json'), 'utf8')) as EditionFile;
   } catch {
-    return 'both';
+    return {};
   }
 }
+
+const edition = readEdition();
+
+function editionDefault(): string {
+  return typeof edition.placeSource === 'string' ? edition.placeSource : 'both';
+}
+
+/**
+ * When this exe was built. Development runs report "dev", which is itself
+ * the answer to "am I looking at the packaged app or the source?".
+ */
+export const buildStamp = edition.builtAt ?? 'dev';
+export const buildCommit = edition.commit ?? '';
 
 function str(value: string | undefined, fallback: string): string {
   const v = (value ?? '').trim();

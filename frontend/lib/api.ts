@@ -250,6 +250,24 @@ export async function fetchEngineInfo(signal?: AbortSignal): Promise<EngineInfo>
   }
 }
 
+/**
+ * Which build is answering.
+ *
+ * Copies of the exe on different machines look identical, so a stale one is
+ * impossible to spot without this.
+ */
+export async function fetchBuildInfo(signal?: AbortSignal): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/health`, { signal });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { build?: string; commit?: string };
+    if (!payload.build) return null;
+    return payload.commit ? `${payload.build} (${payload.commit})` : payload.build;
+  } catch {
+    return null;
+  }
+}
+
 export async function previewBatchCsv(csv: string, signal?: AbortSignal): Promise<BatchPreview> {
   const response = await fetch(`${API_BASE_URL}/api/batch/preview`, {
     method: 'POST',

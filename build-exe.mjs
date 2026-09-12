@@ -59,6 +59,15 @@ function bundleSharp(outDir) {
   console.log(`  bundled sharp + ${copied.size - 1} dependencies`);
 }
 
+/** Short commit of the tree being packaged; empty outside a git checkout. */
+function gitCommit() {
+  try {
+    return execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
+  } catch {
+    return '';
+  }
+}
+
 function run(command, cwd, env = {}) {
   console.log(`\n> ${command}`);
   execSync(command, { cwd, stdio: 'inherit', env: { ...process.env, ...env } });
@@ -239,9 +248,15 @@ if (selected.length === 0) throw new Error(`Unknown edition "${onlyEdition}" (us
 for (const edition of selected) {
   console.log(`\n=== Building ${edition.name} ===`);
 
+  // Stamped so a stale copy on another PC is obvious from the console line
+  // and the app header, rather than looking identical to a current one.
   writeFileSync(
     path.join(stage, 'edition.json'),
-    JSON.stringify({ placeSource: edition.placeSource }),
+    JSON.stringify({
+      placeSource: edition.placeSource,
+      builtAt: new Date().toISOString().slice(0, 16).replace('T', ' '),
+      commit: gitCommit(),
+    }),
   );
   writeFileSync(
     path.join(stage, 'package.json'),

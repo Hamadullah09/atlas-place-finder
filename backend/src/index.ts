@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
-import { autodetectOllama, config, isPackaged } from './config.js';
+import { autodetectOllama, buildCommit, buildStamp, config, isPackaged } from './config.js';
 import { setPublicBaseUrl } from './services/googleSearch.js';
 import { batchRouter } from './routes/batch.js';
 import { downloadRouter } from './routes/download.js';
@@ -44,6 +44,8 @@ app.get('/api/health', async (_req, res) => {
   const store = await getStore().catch(() => null);
   res.json({
     status: 'ok',
+    build: buildStamp,
+    commit: buildCommit,
     uptimeSeconds: Math.round(process.uptime()),
     ui: hasWebBundle,
     engines: {
@@ -179,6 +181,9 @@ async function start(): Promise<void> {
     setPublicBaseUrl(`http://localhost:${port}`);
   }
 
+  console.log(
+    `[place-finder] build ${buildStamp}${buildCommit ? ` (${buildCommit})` : ''}`,
+  );
   console.log(`[place-finder] API listening on http://localhost:${port}`);
   console.log(`[place-finder] CORS origins: ${config.corsOrigins.join(', ')}`);
   console.log(`[place-finder] engines: ${config.placeSource}`);

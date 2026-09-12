@@ -1,4 +1,5 @@
 import Image from 'next/image';
+import BuildStamp from '@/components/BuildStamp';
 import PlaceFinder from '@/components/PlaceFinder';
 
 /**
@@ -31,6 +32,7 @@ export default function HomePage() {
           </a>
 
           <div className="ml-auto flex items-center gap-2">
+            <BuildStamp />
             <a
               href="https://www.openstreetmap.org/copyright"
               target="_blank"
