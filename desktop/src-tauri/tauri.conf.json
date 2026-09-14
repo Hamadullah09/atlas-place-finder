@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "SMA Place Finder",
+  "version": "1.0.0",
+  "identifier": "net.sma.placefinder",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null,
+      "capabilities": []
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/SMA-Place-Finder.exe": "SMA-Place-Finder.exe",
+      "resources/node_modules": "node_modules"
+    },
+    "shortDescription": "Find and export places anywhere",
+    "longDescription": "Search OpenStreetMap for places in any city, research them against Wikipedia and Wikidata, and export illustrated PDFs.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

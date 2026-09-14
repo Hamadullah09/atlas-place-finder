@@ -1,0 +1,13 @@
+{
+  "name": "sma-place-finder-desktop",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Native window around the Place Finder server",
+  "scripts": {
+    "build": "tauri build",
+    "dev": "tauri dev"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

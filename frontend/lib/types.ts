@@ -79,6 +79,12 @@ export interface SearchStats {
 
 export type PlaceEngine = 'osm' | 'google';
 
+export interface SourceLink {
+  label: string;
+  url: string;
+  kind: 'discovery' | 'image' | 'reference' | 'extra';
+}
+
 export interface SearchQuery {
   keyword: string;
   city: string;
@@ -98,6 +104,7 @@ export interface SearchResult {
   area: GeoArea;
   places: Place[];
   stats: SearchStats;
+  sources: SourceLink[];
   cachedAt: string;
 }
 

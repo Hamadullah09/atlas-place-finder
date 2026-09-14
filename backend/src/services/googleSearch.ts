@@ -360,6 +360,9 @@ export async function runGoogleSearch(query: SearchQuery): Promise<SearchResult>
       elapsedMs: Date.now() - startedAt,
       warnings,
     },
+    sources: [
+      { label: 'Google Places', url: 'https://maps.google.com/', kind: 'discovery' as const },
+    ],
     cachedAt: new Date().toISOString(),
   };
 }

@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useId, useState } from 'react';
-import { browseFolder, fetchCategories } from '@/lib/api';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { browseFolder, fetchCategories, fetchSourceCatalogue } from '@/lib/api';
+import type { SourceLink } from '@/lib/types';
 import type { CategorySuggestion, SearchQuery } from '@/lib/types';
 
 export interface SearchFormValues extends SearchQuery {
@@ -15,6 +16,8 @@ export interface SearchFormValues extends SearchQuery {
 interface SearchFormProps {
   initialValues: SearchFormValues;
   values?: SearchFormValues;
+  /** Sources the last search actually used, listed above the extras box. */
+  sources?: SourceLink[];
   loading: boolean;
   /**
    * 'hero' is the first-run screen: the form owns the whole window, so the
@@ -49,6 +52,7 @@ export function isAll(keyword: string): boolean {
 export default function SearchForm({
   initialValues,
   values: controlled,
+  sources,
   loading,
   variant = 'panel',
   onSearch,
@@ -58,6 +62,11 @@ export default function SearchForm({
   const [categories, setCategories] = useState<CategorySuggestion[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [browsing, setBrowsing] = useState(false);
+  const keywordRef = useRef<HTMLInputElement>(null);
+  const customRef = useRef<HTMLInputElement>(null);
+  /** Open state of the "something else" field at the end of the chip row. */
+  const [adding, setAdding] = useState(false);
+  const [custom, setCustom] = useState('');
   const [hintVisible, setHintVisible] = useState(false);
   const listId = useId();
 
@@ -71,6 +80,33 @@ export default function SearchForm({
     void fetchCategories(controller.signal).then(setCategories);
     return () => controller.abort();
   }, []);
+
+  /**
+   * Appends a type to the search box and leaves the cursor after the comma.
+   *
+   * "all" stands for everything, so the first real pick replaces it rather
+   * than joining it.
+   */
+  function addKeyword(value: string, focusBox = true): void {
+    const pick = value.trim().replace(/,+$/, '').trim();
+    if (!pick) return;
+
+    const current = isAll(values.keyword) ? [] : keywordParts(values.keyword);
+    if (current.some((part) => part.toLowerCase() === pick.toLowerCase())) return;
+
+    setValues((previous) => ({
+      ...previous,
+      keyword: `${[...current, pick].join(', ')}, `,
+    }));
+
+    if (!focusBox) return;
+    requestAnimationFrame(() => {
+      const input = keywordRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
 
   function update<K extends keyof SearchFormValues>(key: K, value: SearchFormValues[K]): void {
     setValues((previous) => ({ ...previous, [key]: value }));
@@ -103,6 +139,7 @@ export default function SearchForm({
         <div className={hero ? 'grid gap-2.5 sm:grid-cols-[1.4fr_1fr_1fr]' : 'space-y-2.5'}>
           <Field label="What are you looking for?" big={hero}>
             <input
+              ref={keywordRef}
               list={listId}
               className={hero ? heroInputClass : inputClass}
               placeholder="all"
@@ -179,28 +216,99 @@ export default function SearchForm({
             All places
           </button>
 
-          {QUICK_PICKS.map((pick) => (
+          {QUICK_PICKS.map((pick) => {
+            const chosen = !isAll(values.keyword) && keywordParts(values.keyword).includes(pick);
+            return (
+              <button
+                key={pick}
+                type="button"
+                aria-pressed={chosen}
+                onClick={() => {
+                  if (chosen) {
+                    const next = keywordParts(values.keyword).filter((part) => part !== pick);
+                    update('keyword', next.length > 0 ? next.join(', ') : ALL_PLACES);
+                    return;
+                  }
+
+                  addKeyword(pick);
+                }}
+                className={`rounded-full border font-medium transition ${
+                  hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
+                } ${
+                  chosen
+                    ? 'border-aqua-500 bg-aqua-500/10 text-aqua-300'
+                    : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
+                }`}
+              >
+                {chosen ? `✓ ${pick}` : pick}
+              </button>
+            );
+          })}
+
+          {/* Anything the row does not offer. */}
+          {adding ? (
+            <span className="inline-flex items-center gap-1 overflow-hidden">
+              <input
+                ref={customRef}
+                value={custom}
+                onChange={(event) => setCustom(event.target.value)}
+                onKeyDown={(event) => {
+                  // Enter belongs to this field, not to the search.
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addKeyword(custom, false);
+                    setCustom('');
+                    return;
+                  }
+                  if (event.key === 'Escape') {
+                    setAdding(false);
+                    setCustom('');
+                  }
+                }}
+                onBlur={() => {
+                  if (!custom.trim()) setAdding(false);
+                }}
+                placeholder="e.g. libraries"
+                aria-label="Add another kind of place"
+                className={`w-40 animate-slide-in rounded-full border border-aqua-500 bg-white px-3 text-mist-50 outline-none transition placeholder:text-mist-500 focus:ring-2 focus:ring-aqua-500/20 ${
+                  hero ? 'py-2 text-[15px]' : 'py-1.5 text-[15px]'
+                }`}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  addKeyword(custom, false);
+                  setCustom('');
+                  customRef.current?.focus();
+                }}
+                disabled={!custom.trim()}
+                className="rounded-full bg-aqua-500 px-3 py-1.5 text-[15px] font-semibold text-white transition hover:bg-aqua-600 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAdding(false); setCustom(''); }}
+                aria-label="Close"
+                className="px-1 text-[16px] text-mist-500 transition hover:text-mist-200"
+              >
+                ✕
+              </button>
+            </span>
+          ) : (
             <button
-              key={pick}
               type="button"
               onClick={() => {
-                const current = isAll(values.keyword) ? [] : keywordParts(values.keyword);
-                const next = current.includes(pick)
-                  ? current.filter((part) => part !== pick)
-                  : [...current, pick];
-                update('keyword', next.length > 0 ? next.join(', ') : ALL_PLACES);
+                setAdding(true);
+                requestAnimationFrame(() => customRef.current?.focus());
               }}
-              className={`rounded-full border font-medium transition ${
+              className={`rounded-full border border-dashed border-slate-400 font-semibold text-mist-400 transition hover:border-aqua-500 hover:text-aqua-300 ${
                 hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
-              } ${
-                !isAll(values.keyword) && keywordParts(values.keyword).includes(pick)
-                  ? 'border-aqua-500 bg-aqua-500/10 text-aqua-300'
-                  : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
               }`}
             >
-              {pick}
+              + Add
             </button>
-          ))}
+          )}
         </div>
 
         <Field
@@ -245,6 +353,8 @@ export default function SearchForm({
             </span>
           )}
         </Field>
+
+        <SourcesInUse sources={sources} typed={values.extraSources} big={hero} />
 
         <Field
           label="Extra source links"
@@ -320,6 +430,107 @@ export default function SearchForm({
         )}
       </div>
     </form>
+  );
+}
+
+/**
+ * What this search reads.
+ *
+ * Shows the sources the backend reported for the last run, plus anything
+ * typed into the box below that has not been searched with yet, so adding a
+ * link has visible effect before pressing Search.
+ */
+function SourcesInUse({
+  sources,
+  typed,
+  big,
+}: {
+  sources?: SourceLink[];
+  typed: string;
+  big?: boolean;
+}) {
+  const pending = useMemo(() => {
+    const known = new Set((sources ?? []).map((source) => source.url.toLowerCase()));
+    const seen = new Set<string>();
+    const out: SourceLink[] = [];
+
+    for (const raw of typed.split(/[,\n]+/)) {
+      const value = raw.trim();
+      if (!value) continue;
+      try {
+        const url = new URL(value);
+        const key = url.href.toLowerCase();
+        if (known.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        out.push({ label: url.hostname, url: url.href, kind: 'extra' });
+      } catch {
+        // Half-typed or invalid: nothing useful to show yet.
+      }
+    }
+    return out;
+  }, [sources, typed]);
+
+  const [catalogue, setCatalogue] = useState<SourceLink[]>([]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchSourceCatalogue(controller.signal).then(setCatalogue);
+    return () => controller.abort();
+  }, []);
+
+  const used = sources ?? [];
+  const listed = used.length > 0 ? used : catalogue;
+  const searched = used.length > 0;
+  if (listed.length === 0 && pending.length === 0) return null;
+
+  return (
+    <details className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+      <summary className="cursor-pointer list-none text-[15.5px] font-semibold text-mist-300 marker:hidden">
+        Sources ({listed.length})
+        {pending.length > 0 && (
+          <span className="ml-1.5 font-medium text-aqua-300">
+            +{pending.length} added
+          </span>
+        )}
+      </summary>
+
+      <ul className={`mt-2 space-y-1 ${big ? 'text-[15.5px]' : 'text-[15px]'}`}>
+        {pending.map((source) => (
+          <li key={`pending-${source.url}`} className="flex items-baseline gap-1.5">
+            <span className="shrink-0 rounded bg-aqua-500/10 px-1.5 text-[13.5px] font-semibold text-aqua-300">
+              new
+            </span>
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="truncate text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
+            >
+              {source.label}
+            </a>
+          </li>
+        ))}
+        {listed.map((source) => (
+          <li key={source.url}>
+            <a
+              href={source.url}
+              target="_blank"
+              rel="noreferrer noopener"
+              title={source.url}
+              className="text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
+            >
+              {source.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-1.5 text-[14.5px] text-mist-500">
+        {searched
+          ? 'What this search read.'
+          : 'Searched for every place. Add your own pages below.'}
+      </p>
+    </details>
   );
 }
 

@@ -293,6 +293,19 @@ export const config = {
     /** Small by default: a big batch against a local CPU model times out and
      *  costs every place in it. */
     batchSize: num(process.env.LLM_BATCH_SIZE, 5),
+    /**
+     * Requests in flight at once.
+     *
+     * A local Ollama answers one at a time, so anything above 1 just fills
+     * its queue while each request burns its own timeout waiting -- slower
+     * than serial, and it loses batches. A hosted endpoint has no such
+     * problem, so it keeps the wider pipe.
+     */
+    get concurrency(): number {
+      const configured = num(process.env.LLM_CONCURRENCY, 0);
+      if (configured > 0) return configured;
+      return /localhost|127\.0\.0\.1|\[::1\]/.test(this.baseUrl) ? 1 : 3;
+    },
     /** Local CPU models are slow; the packaged app cannot assume a fast host. */
     timeoutMs: num(process.env.LLM_TIMEOUT_MS, 180_000),
     get enabled(): boolean {

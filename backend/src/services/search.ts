@@ -13,7 +13,7 @@ import { dedupePlaces, informationScore, searchOverpass } from './overpass.js';
 import { setStage, type SearchProgress } from './progress.js';
 import { semanticDedupe } from './semanticDedupe.js';
 import { applyEnglishNames } from './translate.js';
-import type { Place, PlaceImage, RawPlace, SearchQuery, SearchResult } from '../types.js';
+import type { Place, PlaceImage, RawPlace, SearchQuery, SearchResult, SourceLink } from '../types.js';
 
 function wikipediaUrl(tag: string | undefined): string | undefined {
   if (!tag) return undefined;
@@ -51,6 +51,128 @@ export interface RunSearchOptions {
  * Filtering runs *before* image lookup so we never spend requests on entries
  * that are about to be discarded.
  */
+/** Services every OSM search queries, whatever it finds. */
+const DISCOVERY_SOURCES: SourceLink[] = [
+  { label: 'OpenStreetMap Overpass', url: 'https://overpass-api.de/', kind: 'discovery' },
+  { label: 'Wikidata SPARQL', url: 'https://query.wikidata.org/sparql', kind: 'discovery' },
+  { label: 'Nominatim Geocoding', url: 'https://nominatim.openstreetmap.org/', kind: 'discovery' },
+];
+
+/** Where imagery can come from, keyed by the tag each image carries. */
+const IMAGE_SOURCES: Record<string, { label: string; url: string }> = {
+  wikidata: { label: 'Wikimedia Commons (Wikidata)', url: 'https://www.wikidata.org/' },
+  wikipedia: { label: 'Wikipedia', url: 'https://www.wikipedia.org/' },
+  commons: { label: 'Wikimedia Commons', url: 'https://commons.wikimedia.org/' },
+  'commons-category': { label: 'Wikimedia Commons', url: 'https://commons.wikimedia.org/' },
+  'commons-geo': { label: 'Wikimedia Commons (Geo)', url: 'https://commons.wikimedia.org/' },
+  'wikipedia-article': { label: 'Wikipedia Articles', url: 'https://www.wikipedia.org/' },
+  flickr: { label: 'Flickr (CC-licensed)', url: 'https://www.flickr.com/' },
+  europeana: { label: 'Europeana', url: 'https://www.europeana.eu/' },
+  openverse: { label: 'Openverse', url: 'https://openverse.org/' },
+  unsplash: { label: 'Unsplash', url: 'https://unsplash.com/' },
+  google: { label: 'Google Places', url: 'https://maps.google.com/' },
+};
+
+/**
+ * Everything this install can draw on, for the form to show up front.
+ *
+ * A finished search reports what it actually used; this is the menu.
+ */
+export function sourceCatalogue(): SourceLink[] {
+  const seen = new Set<string>();
+  const out: SourceLink[] = [];
+
+  for (const source of DISCOVERY_SOURCES) {
+    seen.add(source.url.toLowerCase());
+    out.push(source);
+  }
+
+  for (const [key, info] of Object.entries(IMAGE_SOURCES)) {
+    // Google imagery only exists in the Google edition.
+    if (key === 'google' && config.placeSource === 'osm') continue;
+    if (seen.has(info.url.toLowerCase())) continue;
+    seen.add(info.url.toLowerCase());
+    out.push({ label: info.label, url: info.url, kind: 'image' });
+  }
+
+  return out;
+}
+
+/** Collect unique sources used during the search. */
+function collectSources(
+  places: Place[],
+  includeImages: boolean,
+  extraSources?: string | string[],
+): SourceLink[] {
+  const seen = new Set<string>();
+  const sources: SourceLink[] = [];
+
+  function add(label: string, url: string, kind: SourceLink['kind']): void {
+    const key = url.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    sources.push({ label, url, kind });
+  }
+
+  // Discovery sources — every search hits all three.
+  for (const source of DISCOVERY_SOURCES) add(source.label, source.url, source.kind);
+
+  // Image sources
+  if (includeImages) {
+    const imageSources = new Set<string>();
+    for (const place of places) {
+      for (const image of place.images) {
+        imageSources.add(image.source);
+      }
+    }
+    const IMAGE_SOURCE_MAP = IMAGE_SOURCES;
+    for (const source of imageSources) {
+      const info = IMAGE_SOURCE_MAP[source];
+      if (info) add(info.label, info.url, 'image');
+    }
+
+    // Add Wikipedia article source pages from place images
+    for (const place of places) {
+      for (const image of place.images) {
+        if (image.sourcePage) {
+          add(
+            image.title ?? `${image.source} image`,
+            image.sourcePage,
+            'image',
+          );
+        }
+      }
+    }
+  }
+
+  // Reference sources (Wikipedia articles for places)
+  for (const place of places) {
+    if (place.wikipediaUrl) {
+      add(`Wikipedia — ${place.name}`, place.wikipediaUrl, 'reference');
+    }
+    if (place.osmUrl) {
+      add(`OpenStreetMap — ${place.name}`, place.osmUrl, 'reference');
+    }
+  }
+
+  // Extra user-provided sources
+  if (extraSources) {
+    const urls = Array.isArray(extraSources)
+      ? extraSources
+      : extraSources.split(/[,\n]+/).map((s) => s.trim()).filter(Boolean);
+    for (const url of urls) {
+      try {
+        const parsed = new URL(url);
+        add(parsed.hostname, url, 'extra');
+      } catch {
+        // Invalid URL — skip
+      }
+    }
+  }
+
+  return sources;
+}
+
 export async function runSearch(query: SearchQuery, options: RunSearchOptions = {}): Promise<SearchResult> {
   const startedAt = Date.now();
   const warnings: string[] = [];
@@ -65,7 +187,8 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   const source: 'osm' | 'google' = query.source === 'google' ? 'google' : 'osm';
 
   const store = await getStore();
-  const cacheKey = cacheKeyFor(keyword, city, country, limit, useLlm, source);
+  const cacheKey = cacheKeyFor(keyword, city, country, limit, useLlm, source)
+    + (query.extraSources?.trim() ? `|${query.extraSources.trim()}` : '');
 
   if (!options.refresh) {
     const cached = await store.get(cacheKey).catch(() => null);
@@ -149,7 +272,19 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     total: named.length,
     message: `Checking ${named.length} places are relevant`,
   });
-  const enrichment = await enrichPlaces(named, { keyword, city: area.city, country: area.country, useLlm });
+  const enrichment = await enrichPlaces(named, {
+    keyword,
+    city: area.city,
+    country: area.country,
+    useLlm,
+    onBatch: (done, total) => {
+      setStage(options.progress, 'filtering', {
+        done: Math.min(done, total),
+        total,
+        message: `Checking ${Math.min(done, total)} of ${total} places are relevant`,
+      });
+    },
+  });
   warnings.push(...enrichment.warnings);
 
   const enrichedById = new Map(enrichment.places.map((entry) => [entry.placeId, entry]));
@@ -212,6 +347,8 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     };
   });
 
+  const sources = collectSources(places, includeImages, query.extraSources);
+
   const result: SearchResult = {
     searchId: randomUUID(),
     query: { keyword, city, country, limit, useLlm, includeImages },
@@ -227,6 +364,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
       elapsedMs: Date.now() - startedAt,
       warnings,
     },
+    sources,
     cachedAt: new Date().toISOString(),
   };
 

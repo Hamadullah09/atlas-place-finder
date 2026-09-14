@@ -7,7 +7,7 @@ import ResultsPanel from '@/components/ResultsPanel';
 import SearchForm, { type SearchFormValues } from '@/components/SearchForm';
 import HeroSearch from '@/components/HeroSearch';
 import SearchProgressView from '@/components/SearchProgress';
-import { downloadArchive, searchPlaces, type SearchProgress } from '@/lib/api';
+import { downloadArchive, NetworkError, searchPlaces, type SearchProgress } from '@/lib/api';
 import type { Place, SearchResult } from '@/lib/types';
 
 const DEFAULT_VALUES: SearchFormValues = {
@@ -82,7 +82,19 @@ export default function PlaceFinder() {
       }
     } catch (caught) {
       if (controller.signal.aborted) return;
-      setError(caught instanceof Error ? caught.message : String(caught));
+      let message: string;
+      if (caught instanceof NetworkError) {
+        if (caught.kind === 'no-internet') {
+          message = 'No internet connection. Please check your network and try again.';
+        } else if (caught.kind === 'timeout') {
+          message = 'Search timed out. The server may be overloaded — try a smaller area or fewer results.';
+        } else {
+          message = `Search failed: ${caught.message}`;
+        }
+      } else {
+        message = caught instanceof Error ? caught.message : String(caught);
+      }
+      setError(message);
       setResult(null);
     } finally {
       if (searchAbort.current === controller) {
@@ -105,6 +117,17 @@ export default function PlaceFinder() {
     document
       .getElementById(`place-${place.id.replace('/', '-')}`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, []);
+
+  const handleAddSuggestion = useCallback((place: Place) => {
+    setFormValues((prev) => ({
+      ...prev,
+      keyword: place.categoryLabel,
+    }));
+    setToast({
+      tone: 'info',
+      message: `Added "${place.categoryLabel}" — modify if needed, then search again.`,
+    });
   }, []);
 
   const runDownload = useCallback(
@@ -152,6 +175,22 @@ export default function PlaceFinder() {
   );
 
   const handleDownloadAll = useCallback(() => void runDownload(undefined, null), [runDownload]);
+
+  /**
+   * A chosen folder is an instruction, not a preference: write the export
+   * there as soon as there is something to write, rather than making the
+   * user ask for it a second time. Runs once per result; the button stays
+   * for re-exporting after changing the filters.
+   */
+  const autoSaved = useRef<string | null>(null);
+  useEffect(() => {
+    if (!result || result.places.length === 0) return;
+    if (!formValues.downloadPath.trim()) return;
+    if (autoSaved.current === result.searchId) return;
+
+    autoSaved.current = result.searchId;
+    void runDownload(undefined, null);
+  }, [result, formValues.downloadPath, runDownload]);
   const handleDownloadPlace = useCallback(
     (place: Place) => void runDownload([place.id], place),
     [runDownload],
@@ -200,6 +239,18 @@ export default function PlaceFinder() {
           onSearch={handleSearch}
           onCancel={handleCancelSearch}
           onBatch={() => setMode('batch')}
+          onAddSuggestion={(keyword, city, country) => {
+            setFormValues((prev) => ({
+              ...prev,
+              keyword,
+              city,
+              country,
+            }));
+            setToast({
+              tone: 'info',
+              message: `Ready to search for "${keyword}" in ${city}, ${country}. Hit Search!`,
+            });
+          }}
         />
       ) : (
       <div className="relative flex min-h-0 flex-1 flex-col lg:block">
@@ -216,6 +267,7 @@ export default function PlaceFinder() {
               <SearchForm
                 initialValues={DEFAULT_VALUES}
                 values={formValues}
+                sources={result?.sources}
                 loading={loading}
                 onSearch={handleSearch}
                 onCancel={handleCancelSearch}
@@ -238,11 +290,18 @@ export default function PlaceFinder() {
               <div className="shrink-0 rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5">
                 <p className="text-[17px] font-semibold text-red-700">Search failed</p>
                 <p className="mt-1 text-[16px] leading-relaxed text-mist-300">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => void handleSearch(formValues)}
+                  className="mt-2.5 rounded-xl border border-red-500/30 px-3.5 py-1.5 text-[15.5px] font-semibold text-red-700 transition hover:bg-red-500/10"
+                >
+                  Retry search
+                </button>
               </div>
             )}
 
             {result && !loading && (
-              <section className="flex min-h-0 flex-1 flex-col" aria-label="Search results">
+              <section aria-label="Search results">
                 <ResultsPanel
                   result={result}
                   loading={false}
@@ -253,6 +312,7 @@ export default function PlaceFinder() {
                   onSelect={handleSelect}
                   onDownloadPlace={handleDownloadPlace}
                   onDownloadAll={handleDownloadAll}
+                  onAddSuggestion={handleAddSuggestion}
                   savePath={formValues.downloadPath.trim() || undefined}
                 />
               </section>
@@ -260,6 +320,9 @@ export default function PlaceFinder() {
           </div>
         )}
       </div>
+
+      </div>
+      )}
 
       {toast && (
         <div
@@ -284,8 +347,6 @@ export default function PlaceFinder() {
             ✕
           </button>
         </div>
-      )}
-      </div>
       )}
     </>
   );

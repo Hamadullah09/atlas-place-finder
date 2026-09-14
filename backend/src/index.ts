@@ -5,6 +5,7 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import { autodetectOllama, buildCommit, buildStamp, config, isPackaged } from './config.js';
+import { confirmConnectivity, connectivityState } from './lib/connectivity.js';
 import { setPublicBaseUrl } from './services/googleSearch.js';
 import { batchRouter } from './routes/batch.js';
 import { downloadRouter } from './routes/download.js';
@@ -41,11 +42,16 @@ app.use(express.json({ limit: config.limits.maxRequestBodyBytes }));
 const hasWebBundle = existsSync(path.join(config.webDir, 'index.html'));
 
 app.get('/api/health', async (_req, res) => {
+  // While the link is down this is the only thing still asking, so it has to
+  // do the asking: nothing else would notice the connection coming back.
+  if (!connectivityState().online) void confirmConnectivity();
+
   const store = await getStore().catch(() => null);
   res.json({
     status: 'ok',
     build: buildStamp,
     commit: buildCommit,
+    internet: connectivityState(),
     uptimeSeconds: Math.round(process.uptime()),
     ui: hasWebBundle,
     engines: {
@@ -111,6 +117,10 @@ app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 function openBrowser(port: number): void {
+  // The desktop shell shows the UI in its own window and sets this, so the
+  // server must not also throw a browser tab at the user.
+  if (process.env.PLACE_FINDER_NO_BROWSER === '1') return;
+
   if (isPackaged && hasWebBundle && process.platform === 'win32') {
     exec(`start "" "http://localhost:${port}"`, { shell: 'cmd.exe' });
   }

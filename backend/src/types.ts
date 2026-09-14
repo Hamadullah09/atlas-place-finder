@@ -147,6 +147,8 @@ export interface SearchQuery {
   includeImages?: boolean;
   /** Which engine answers the search: open-source stack (default) or Google. */
   source?: 'osm' | 'google';
+  /** Pages the operator added, listed alongside the sources we found. */
+  extraSources?: string;
 }
 
 export interface SearchStats {
@@ -160,11 +162,18 @@ export interface SearchStats {
   warnings: string[];
 }
 
+export interface SourceLink {
+  label: string;
+  url: string;
+  kind: 'discovery' | 'image' | 'reference' | 'extra';
+}
+
 export interface SearchResult {
   searchId: string;
   query: SearchQuery;
   area: GeoArea;
   places: Place[];
   stats: SearchStats;
+  sources: SourceLink[];
   cachedAt: string;
 }

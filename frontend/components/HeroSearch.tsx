@@ -27,6 +27,15 @@ const STEPS = [
   },
 ];
 
+const SUGGESTED_PLACES: Array<{ keyword: string; city: string; country: string; label: string; description: string }> = [
+  { keyword: 'museums', city: 'Kyoto', country: 'Japan', label: 'Museums in Kyoto', description: 'Explore Kyoto\'s rich museum scene' },
+  { keyword: 'parks', city: 'Barcelona', country: 'Spain', label: 'Parks in Barcelona', description: 'Discover Barcelona\'s green spaces' },
+  { keyword: 'tourist places', city: 'Istanbul', country: 'Turkey', label: 'Sights in Istanbul', description: 'Historic landmarks of Istanbul' },
+  { keyword: 'universities', city: 'Oxford', country: 'United Kingdom', label: 'Universities in Oxford', description: 'World-famous academic institutions' },
+  { keyword: 'temples', city: 'Bangkok', country: 'Thailand', label: 'Temples in Bangkok', description: 'Sacred temples and shrines' },
+  { keyword: 'historical sites', city: 'Rome', country: 'Italy', label: 'Historic Rome', description: 'Ancient Roman landmarks' },
+];
+
 export default function HeroSearch({
   values,
   initialValues,
@@ -34,6 +43,7 @@ export default function HeroSearch({
   onSearch,
   onCancel,
   onBatch,
+  onAddSuggestion,
 }: {
   values: SearchFormValues;
   initialValues: SearchFormValues;
@@ -41,10 +51,11 @@ export default function HeroSearch({
   onSearch: (values: SearchFormValues) => void;
   onCancel: () => void;
   onBatch: () => void;
+  onAddSuggestion?: (keyword: string, city: string, country: string) => void;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto scroll-region px-4 py-8">
-      <div className="w-full max-w-3xl">
+    <div className="flex min-h-0 flex-1 justify-center overflow-y-auto scroll-region px-4 py-8">
+      <div className="my-auto w-full max-w-3xl">
         <div className="text-center">
           <h1 className="text-balance text-[26px] font-semibold leading-tight tracking-tight text-mist-50 sm:text-[32px]">
             Research every place of a kind,
@@ -65,6 +76,36 @@ export default function HeroSearch({
             onCancel={onCancel}
           />
         </div>
+
+        {onAddSuggestion && (
+          <div className="mt-6">
+            <h2 className="text-center text-[15.5px] font-semibold text-mist-300">
+              Suggested searches
+            </h2>
+            <div className="mt-3 grid gap-2.5 sm:grid-cols-2">
+              {SUGGESTED_PLACES.map((place) => (
+                <button
+                  key={`${place.keyword}-${place.city}`}
+                  type="button"
+                  onClick={() => onAddSuggestion(place.keyword, place.city, place.country)}
+                  className="group flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-aqua-500/40 hover:bg-aqua-500/[0.04]"
+                >
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-aqua-500/10 text-[14.5px] font-bold text-aqua-300 transition group-hover:bg-aqua-500/20">
+                    +
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[15.5px] font-semibold text-mist-100 group-hover:text-aqua-300">
+                      {place.label}
+                    </span>
+                    <span className="block text-[14.5px] text-mist-500">
+                      {place.description}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <ol className="mt-8 grid gap-4 sm:grid-cols-3">
           {STEPS.map((step) => (

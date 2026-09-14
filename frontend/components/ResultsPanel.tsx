@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import PlaceCard from '@/components/PlaceCard';
-import type { Place, SearchResult } from '@/lib/types';
+import type { Place, SearchResult, SourceLink } from '@/lib/types';
 
 type SortKey = 'quality' | 'name' | 'images';
 
@@ -16,6 +16,7 @@ interface ResultsPanelProps {
   onSelect: (place: Place) => void;
   onDownloadPlace: (place: Place) => void;
   onDownloadAll: () => void;
+  onAddSuggestion?: (place: Place) => void;
   /** Set when the operator chose a folder — changes the wording and icon. */
   savePath?: string;
 }
@@ -30,6 +31,7 @@ export default function ResultsPanel({
   onSelect,
   onDownloadPlace,
   onDownloadAll,
+  onAddSuggestion,
   savePath,
 }: ResultsPanelProps) {
   const [sortKey, setSortKey] = useState<SortKey>('quality');
@@ -53,7 +55,7 @@ export default function ResultsPanel({
   if (!result) return <EmptyState />;
 
   return (
-    <div className="flex min-h-0 flex-col">
+    <div className="flex flex-col">
       {/* Summary header */}
       <div className="shrink-0 px-1 pb-2.5">
         <div className="flex items-baseline gap-2">
@@ -95,6 +97,10 @@ export default function ResultsPanel({
             </ul>
           </details>
         )}
+
+        {result.sources && result.sources.length > 0 && (
+          <SourceLinksSection sources={result.sources} />
+        )}
       </div>
 
       {/* Primary action, on its own row so it cannot be mistaken for a filter. */}
@@ -116,7 +122,7 @@ export default function ResultsPanel({
                 <path fill="currentColor" d="M12 3v10.6l3.3-3.3 1.4 1.4L12 17.4l-4.7-5.7 1.4-1.4L12 13.6V3Zm-7 16h14v2H5Z" />
               </svg>
               {savePath
-                ? `Save all ${result.places.length} to my folder`
+                ? `Save all ${result.places.length} again`
                 : `Download all ${result.places.length}`}
             </>
           )}
@@ -124,7 +130,7 @@ export default function ResultsPanel({
 
         {savePath && (
           <p className="mt-1.5 text-center text-[13px] text-mist-500">
-            Files are saved to {savePath}
+            Saved automatically to {savePath}
           </p>
         )}
       </div>
@@ -184,7 +190,7 @@ export default function ResultsPanel({
           )}
         </div>
       ) : (
-        <div className="scroll-region -mr-2 mt-2.5 flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pb-4 pr-2">
+        <div className="mt-2.5 flex flex-col gap-2.5 pb-4">
           {places.map((place, index) => (
             <PlaceCard
               key={place.id}
@@ -195,6 +201,7 @@ export default function ResultsPanel({
               downloading={downloadingPlaceId === place.id}
               onSelect={onSelect}
               onDownload={onDownloadPlace}
+              onAddSuggestion={onAddSuggestion}
             />
           ))}
         </div>
@@ -206,6 +213,72 @@ export default function ResultsPanel({
 function shortModel(model: string | undefined): string {
   if (!model) return 'LLM';
   return model.split('/').pop() ?? model;
+}
+
+function SourceLinksSection({ sources }: { sources: SourceLink[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const KIND_META: Record<SourceLink['kind'], { label: string; className: string }> = {
+    discovery: { label: 'Discovery', className: 'text-aqua-300 bg-aqua-500/10' },
+    image: { label: 'Imagery', className: 'text-violet-700 bg-violet-500/10' },
+    reference: { label: 'Reference', className: 'text-sky-700 bg-sky-500/10' },
+    extra: { label: 'Extra', className: 'text-ember-300 bg-ember-500/10' },
+  };
+
+  const grouped = useMemo(() => {
+    const map = new Map<SourceLink['kind'], SourceLink[]>();
+    for (const source of sources) {
+      const list = map.get(source.kind) ?? [];
+      list.push(source);
+      map.set(source.kind, list);
+    }
+    return map;
+  }, [sources]);
+
+
+  return (
+    <details
+      open={expanded}
+      onToggle={(event) => setExpanded((event.target as HTMLDetailsElement).open)}
+      className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5"
+    >
+      <summary className="cursor-pointer list-none text-[16px] font-medium text-mist-300 marker:hidden">
+        <span className="inline-flex items-center gap-1.5">
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
+            <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
+          </svg>
+          Data Sources ({sources.length})
+        </span>
+      </summary>
+      <div className="mt-2 space-y-2">
+        {[...grouped.entries()].map(([kind, kindSources]) => {
+          const meta = KIND_META[kind];
+          return (
+            <div key={kind}>
+              <span className={`inline-block rounded-md px-1.5 py-0.5 text-[14.5px] font-semibold ${meta.className}`}>
+                {meta.label}
+              </span>
+              <ul className="mt-1 space-y-0.5">
+                {kindSources.map((source) => (
+                  <li key={source.url}>
+                    <a
+                      href={source.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="text-[15.5px] text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
+                      title={source.url}
+                    >
+                      {source.label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+
+      </div>
+    </details>
+  );
 }
 
 function Stat({ value, label, accent }: { value: string; label: string; accent?: boolean }) {

@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { parseBatchCsv } from '../lib/csv.js';
 import {
   cancelBatchJob,
+  retryBatchRows,
   getBatchJob,
   getRunningBatchJob,
   startBatchJob,
@@ -257,6 +258,19 @@ batchRouter.get('/batch/:jobId', (req, res) => {
     return;
   }
   res.json({ job });
+});
+
+/** Puts failed regions back in the queue; the runner resumes if it had stopped. */
+batchRouter.post('/batch/:jobId/retry', (req, res) => {
+  const raw = (req.body as { index?: unknown } | undefined)?.index;
+  const index = typeof raw === 'number' && Number.isInteger(raw) && raw >= 0 ? raw : undefined;
+
+  const requeued = retryBatchRows(req.params.jobId, index);
+  if (requeued === 0) {
+    res.status(404).json({ error: 'Nothing to retry for that job.' });
+    return;
+  }
+  res.json({ requeued });
 });
 
 batchRouter.post('/batch/:jobId/cancel', (req, res) => {

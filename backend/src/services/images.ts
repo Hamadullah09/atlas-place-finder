@@ -618,15 +618,23 @@ export async function fetchImagesForPlaces(
     const lang = parsed ? parsed[1]!.toLowerCase() : 'en';
     const articleTitle = parsed ? parsed[2]! : wikipediaTag?.trim();
 
-    if (short() && wikipediaTag) {
-      const image = await wikipediaLeadImage(wikipediaTag);
-      if (image) collected.push(image);
-    }
-
     // 3. The whole Commons category — usually the biggest single haul.
     const category = place.tags.wikimedia_commons?.trim();
-    if (short() && category) {
-      collected.push(...(await commonsCategoryImages(category, perPlace - collected.length)));
+
+    // Run Wikipedia lead image and Commons category in parallel (independent sources)
+    const parallelResults = await Promise.allSettled([
+      short() && wikipediaTag ? wikipediaLeadImage(wikipediaTag) : Promise.resolve(null),
+      short() && category ? commonsCategoryImages(category, perPlace) : Promise.resolve([]),
+    ]);
+
+    for (const result of parallelResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        if (Array.isArray(result.value)) {
+          collected.push(...result.value);
+        } else {
+          collected.push(result.value);
+        }
+      }
     }
 
     // 4. Everything embedded in the Wikipedia article.

@@ -1,0 +1,23 @@
+[package]
+name = "sma-place-finder"
+version = "1.0.0"
+description = "SMA Place Finder"
+authors = ["SMA Technology"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Health-checking the local server needs nothing more than a blocking GET, and
+# a small client keeps the shell's build time and binary size down.
+ureq = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

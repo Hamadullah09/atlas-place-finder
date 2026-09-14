@@ -66,6 +66,8 @@ export interface EnrichContext {
   city: string;
   country: string;
   useLlm?: boolean;
+  /** Called as each batch lands, so a long filter can show it is moving. */
+  onBatch?: (done: number, total: number) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,10 +425,16 @@ export async function enrichPlaces(
   const fallbackById = new Map(fallback.map((entry) => [entry.placeId, entry]));
   const batches = chunk(places, Math.max(1, config.llm.batchSize));
 
-  const settled = await mapLimit(batches, 3, async (batch) => {
+  let finished = 0;
+  const settled = await mapLimit(batches, config.llm.concurrency, async (batch) => {
     const payload = batch.map((place, index) => compactPlace(place, index));
-    const parsed = await callLlm(payload, context);
-    return { batch, parsed };
+    try {
+      const parsed = await callLlm(payload, context);
+      return { batch, parsed };
+    } finally {
+      finished += 1;
+      context.onBatch?.(finished * batch.length, places.length);
+    }
   });
 
   const merged = new Map<string, EnrichedPlace>();

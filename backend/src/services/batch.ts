@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { isCancellation, runCancellable } from '../lib/cancel.js';
+import { confirmConnectivity, isOffline } from '../lib/connectivity.js';
 import type { BatchTarget } from '../lib/csv.js';
 import { sanitizePathSegment } from '../lib/sanitize.js';
 import { streamPlacesArchive } from './archive.js';
@@ -51,6 +52,8 @@ export interface BatchJob {
   /** Place ids already written in this run, so regions never duplicate work. */
   exportedPlaceIds: string[];
   notes: string[];
+  /** True while the runner is parked waiting for the internet to return. */
+  networkDown?: boolean;
   startedAt: string;
   finishedAt?: string;
 }
@@ -81,6 +84,9 @@ interface ActiveJob {
   controller: AbortController;
 }
 
+/** What each job was started with, so a retry can resume it. */
+const lastInput = new Map<string, BatchJobInput>();
+
 /** Single-user tool — one live job, and the last few kept for the UI. */
 const jobs = new Map<string, ActiveJob>();
 let runningJobId: string | null = null;
@@ -91,6 +97,44 @@ export function getBatchJob(id: string): BatchJob | null {
 
 export function getRunningBatchJob(): BatchJob | null {
   return runningJobId ? (jobs.get(runningJobId)?.job ?? null) : null;
+}
+
+/**
+ * Puts failed regions back in the queue.
+ *
+ * Restarts the runner when the job has already finished, so a retry works
+ * the same whether the run is still going or long since over.
+ */
+export function retryBatchRows(id: string, index?: number): number {
+  const active = jobs.get(id);
+  if (!active) return 0;
+
+  const { job } = active;
+  const targets = job.rows.filter((row, position) => (
+    row.status === 'failed' && (index === undefined || position === index)
+  ));
+  if (targets.length === 0) return 0;
+
+  for (const row of targets) {
+    row.status = 'pending';
+    row.error = undefined;
+    row.progress = undefined;
+  }
+  job.notes.push(`Re-queued ${targets.length} region(s) for another attempt.`);
+
+  if (job.status !== 'running') {
+    const input = lastInput.get(id);
+    if (input) {
+      job.status = 'running';
+      job.finishedAt = undefined;
+      active.cancelRequested = false;
+      active.controller = new AbortController();
+      runningJobId = job.id;
+      void runJob(active, input).catch(() => undefined);
+    }
+  }
+
+  return targets.length;
 }
 
 export function cancelBatchJob(id: string): boolean {
@@ -147,6 +191,7 @@ export async function startBatchJob(input: BatchJobInput): Promise<BatchJob> {
 
   const active: ActiveJob = { job, cancelRequested: false, controller: new AbortController() };
   jobs.set(job.id, active);
+  lastInput.set(job.id, input);
   runningJobId = job.id;
 
   // Keep memory bounded: drop finished jobs beyond the last five.
@@ -184,6 +229,11 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
     .replace(/\s+/g, '-')
     .toLowerCase();
 
+  // Attempts spent on a region because the link dropped, so a flapping
+  // connection cannot keep one region in the queue for ever.
+  const networkAttempts = new Map<number, number>();
+  const MAX_NETWORK_ATTEMPTS = 3;
+
   for (let index = 0; index < job.rows.length; index += 1) {
     if (active.cancelRequested) {
       job.status = 'cancelled';
@@ -191,7 +241,24 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
     }
 
     const row = job.rows[index]!;
+    // Later passes only revisit what is still queued.
+    if (row.status !== 'pending') continue;
     job.currentIndex = index;
+
+    // Wait out an outage rather than failing every remaining region.
+    if (isOffline()) {
+      job.networkDown = true;
+      while (isOffline() && !active.cancelRequested) {
+        await new Promise((resolve) => setTimeout(resolve, 10_000));
+        await confirmConnectivity(true);
+      }
+      job.networkDown = false;
+      if (active.cancelRequested) {
+        job.status = 'cancelled';
+        break;
+      }
+      job.notes.push(`Connection restored — resuming at ${row.region}.`);
+    }
 
     const countryDir = sanitizePathSegment(row.country, 'Unknown Country');
     const regionDir = sanitizePathSegment(row.region, 'Unknown Region');
@@ -300,10 +367,37 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
         break;
       }
 
+      // Lost the link part-way: leave the region queued and try it again
+      // on the next pass rather than recording a failure that never was.
+      if (isOffline()) {
+        const spent = (networkAttempts.get(index) ?? 0) + 1;
+        networkAttempts.set(index, spent);
+
+        if (spent <= MAX_NETWORK_ATTEMPTS) {
+          row.status = 'pending';
+          row.progress = undefined;
+          job.notes.push(
+            `${row.region}, ${row.country}: interrupted by the connection dropping; still queued.`,
+          );
+          index -= 1;
+          continue;
+        }
+
+        job.notes.push(
+          `${row.region}, ${row.country}: gave up after ${MAX_NETWORK_ATTEMPTS} attempts on an unstable connection.`,
+        );
+      }
+
       row.status = 'failed';
       row.error = error instanceof Error ? error.message : String(error);
       job.notes.push(`${row.region}, ${row.country}: ${row.error}`);
     }
+  }
+
+  // A retry pressed while this pass was running leaves rows queued behind
+  // the cursor; sweep again rather than making the operator start a job.
+  if (job.status === 'running' && job.rows.some((entry) => entry.status === 'pending')) {
+    return runJob(active, input);
   }
 
   if (job.status === 'running') job.status = 'completed';

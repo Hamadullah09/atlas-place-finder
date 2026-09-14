@@ -1,8 +1,127 @@
-import type { CategorySuggestion, Place, SearchQuery, SearchResult } from './types';
+import type { CategorySuggestion, Place, SearchQuery, SearchResult, SourceLink } from './types';
 
 export const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:4000'
 ).replace(/\/+$/, '');
+
+// ---------------------------------------------------------------------------
+// Network status utilities
+// ---------------------------------------------------------------------------
+
+export type NetworkStatus = 'online' | 'offline' | 'checking';
+
+let currentStatus: NetworkStatus = typeof navigator !== 'undefined' && navigator.onLine ? 'online' : 'offline';
+const listeners = new Set<(status: NetworkStatus) => void>();
+
+function updateStatus(status: NetworkStatus): void {
+  if (currentStatus === status) return;
+  currentStatus = status;
+  for (const listener of listeners) listener(status);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    updateStatus('checking');
+    void refreshNetworkStatus();
+  });
+  window.addEventListener('offline', () => updateStatus('offline'));
+}
+
+/**
+ * Asks the server whether *it* can reach the internet, and believes that
+ * over the browser.
+ *
+ * The UI talks only to localhost, which keeps answering happily while every
+ * upstream call fails, so the browser alone can never report an outage.
+ */
+export async function refreshNetworkStatus(): Promise<NetworkStatus> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    updateStatus('offline');
+    return 'offline';
+  }
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/health`, {
+      signal: AbortSignal.timeout(6_000),
+    });
+    if (!response.ok) throw new Error('health check failed');
+    const payload = (await response.json()) as { internet?: { online?: boolean } };
+    const status: NetworkStatus = payload.internet?.online === false ? 'offline' : 'online';
+    updateStatus(status);
+    return status;
+  } catch {
+    // The server itself is unreachable, which the user also needs to know.
+    updateStatus('offline');
+    return 'offline';
+  }
+}
+
+export function getNetworkStatus(): NetworkStatus {
+  return currentStatus;
+}
+
+export function onNetworkStatusChange(callback: (status: NetworkStatus) => void): () => void {
+  listeners.add(callback);
+  return () => { listeners.delete(callback); };
+}
+
+export function isOffline(): boolean {
+  return currentStatus === 'offline';
+}
+
+/**
+ * A fetch wrapper that times out and detects network failures distinctly.
+ * Returns a structured error that callers can distinguish:
+ * - 'no-internet': navigator.onLine is false or fetch failed immediately
+ * - 'timeout': the request took too long
+ * - 'api-error': the server responded with an error status
+ * - 'network-error': other fetch failure
+ */
+export class NetworkError extends Error {
+  constructor(
+    readonly kind: 'no-internet' | 'timeout' | 'api-error' | 'network-error',
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'NetworkError';
+  }
+}
+
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeoutMs?: number } = {},
+): Promise<Response> {
+  const { timeoutMs = 15_000, ...fetchOptions } = options;
+
+
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+    if (!response.ok) {
+      let message = `${response.status} ${response.statusText}`;
+      try {
+        const payload = (await response.json()) as { error?: string };
+        if (payload.error) message = payload.error;
+      } catch { /* keep status text */ }
+      throw new NetworkError('api-error', message, response.status);
+    }
+
+    return response;
+  } catch (error) {
+    if (error instanceof NetworkError) throw error;
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      throw new NetworkError('timeout', 'Request timed out. The server may be slow or unreachable.');
+    }
+    if (!navigator.onLine) {
+      throw new NetworkError('no-internet', 'No internet connection detected.');
+    }
+    throw new NetworkError('network-error', error instanceof Error ? error.message : String(error));
+  }
+}
 
 export class ApiError extends Error {
   constructor(
@@ -60,16 +179,35 @@ export async function searchPlaces(
     globalThis.crypto?.randomUUID?.() ?? `s${Date.now()}${Math.floor(Math.random() * 1e6)}`;
 
   let poller: ReturnType<typeof setInterval> | undefined;
+  let pollFailures = 0;
   if (onProgress) {
     poller = setInterval(() => {
-      void fetch(`${API_BASE_URL}/api/search/progress/${progressId}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((p) => { if (p) onProgress(p as SearchProgress); })
-        .catch(() => undefined);
+      if (signal?.aborted) return;
+      void fetch(`${API_BASE_URL}/api/search/progress/${progressId}`, {
+        signal: AbortSignal.timeout(8_000),
+      })
+        .then((r) => {
+          if (r.ok) return r.json();
+          throw new Error(`Progress poll failed: ${r.status}`);
+        })
+        .then((p) => {
+          if (p) {
+            onProgress(p as SearchProgress);
+            pollFailures = 0;
+          }
+        })
+        .catch(() => {
+          pollFailures += 1;
+          // Don't let polling failures cascade — the main search request
+          // will eventually resolve or fail on its own.
+        });
     }, 1_200);
   }
 
   try {
+    // A whole-city search legitimately runs for minutes, so this has no
+    // timeout of its own; a dead connection surfaces as a NetworkError from
+    // the catch below instead of a raw "Failed to fetch".
     const response = await fetch(`${API_BASE_URL}/api/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -78,6 +216,19 @@ export async function searchPlaces(
     });
     if (!response.ok) await readError(response);
     return (await response.json()) as SearchResult;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof ApiError) {
+      // The server answered, so this is its message, not a network fault.
+      throw error;
+    }
+    const status = await refreshNetworkStatus();
+    throw new NetworkError(
+      status === 'offline' ? 'no-internet' : 'network-error',
+      status === 'offline'
+        ? 'No internet connection.'
+        : (error instanceof Error ? error.message : String(error)),
+    );
   } finally {
     if (poller) clearInterval(poller);
   }
@@ -89,6 +240,23 @@ export async function fetchCategories(signal?: AbortSignal): Promise<CategorySug
     if (!response.ok) return [];
     const payload = (await response.json()) as { categories?: CategorySuggestion[] };
     return payload.categories ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The services this install searches.
+ *
+ * Fetched rather than listed in the UI so the two cannot drift: the backend
+ * builds this from the same tables a finished search reports against.
+ */
+export async function fetchSourceCatalogue(signal?: AbortSignal): Promise<SourceLink[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/sources`, { signal });
+    if (!response.ok) return [];
+    const payload = (await response.json()) as { sources?: SourceLink[] };
+    return payload.sources ?? [];
   } catch {
     return [];
   }
@@ -212,6 +380,8 @@ export interface BatchJob {
   currentIndex: number;
   exportedPlaceIds: string[];
   notes: string[];
+  /** True while the server is parked waiting for the internet to return. */
+  networkDown?: boolean;
   startedAt: string;
   finishedAt?: string;
 }
@@ -338,6 +508,22 @@ export async function browseFolder(signal?: AbortSignal): Promise<string | null>
   }
 
   return null;
+}
+
+/**
+ * Puts failed regions back in the queue.
+ *
+ * Omit the index to retry every failed region in the job.
+ */
+export async function retryBatchRows(jobId: string, index?: number): Promise<number> {
+  const response = await fetch(`${API_BASE_URL}/api/batch/${encodeURIComponent(jobId)}/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(index === undefined ? {} : { index }),
+  });
+  if (!response.ok) await readError(response);
+  const payload = (await response.json()) as { requeued?: number };
+  return payload.requeued ?? 0;
 }
 
 export async function cancelBatch(jobId: string): Promise<void> {

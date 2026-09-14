@@ -9,7 +9,7 @@ import { GeocodeError } from '../services/geocode.js';
 import { googleConfigured, GoogleSearchError } from '../services/googleSearch.js';
 import { OverpassError } from '../services/overpass.js';
 import { createProgress, failProgress, getProgress } from '../services/progress.js';
-import { runSearch } from '../services/search.js';
+import { runSearch, sourceCatalogue } from '../services/search.js';
 import { fetchWithPolicy } from '../lib/http.js';
 
 export const searchRouter = Router();
@@ -27,6 +27,9 @@ const searchBodySchema = z.object({
   includeImages: z.boolean().optional(),
   refresh: z.boolean().optional(),
   source: z.enum(['osm', 'google']).optional(),
+  // Without this zod strips the field and the operator's own links never
+  // reach the search at all.
+  extraSources: z.string().max(2_000).optional(),
   /** Client-generated id it polls for live stage updates. */
   progressId: z.string().regex(/^[A-Za-z0-9_-]{8,80}$/).optional(),
 });
@@ -43,6 +46,11 @@ const searchLimiter = rateLimit({
   max: 12,
   windowMs: 60_000,
   message: 'Search rate limit reached. Wait a minute before trying again.',
+});
+
+/** The services this install searches, so the UI need not hardcode them. */
+searchRouter.get('/sources', (_req, res) => {
+  res.json({ sources: sourceCatalogue() });
 });
 
 searchRouter.get('/categories', (_req, res) => {

@@ -81,6 +81,13 @@ export function createProgress(id?: string): SearchProgress {
   return entry;
 }
 
+/**
+ * The console window is the only feedback a packaged user has if the browser
+ * tab is closed, and a slow local model can hold one stage for an hour. Each
+ * change of stage prints once; repeats inside a stage do not.
+ */
+let lastLogged = '';
+
 export function setStage(
   progress: SearchProgress | undefined,
   stage: SearchStage,
@@ -92,6 +99,12 @@ export function setStage(
   progress.done = detail?.done;
   progress.total = detail?.total;
   progress.updatedAt = Date.now();
+
+  const line = `${stage}:${progress.message}`;
+  if (line !== lastLogged) {
+    lastLogged = line;
+    console.log(`[place-finder] ${progress.message}`);
+  }
 }
 
 export function failProgress(progress: SearchProgress | undefined, error: string): void {

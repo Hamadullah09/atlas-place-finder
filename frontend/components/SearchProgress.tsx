@@ -16,7 +16,7 @@ const STEPS: Array<{ stage: SearchStage; label: string; hint: string }> = [
   { stage: 'imagery', label: 'Find photos', hint: 'Wikimedia Commons and Openverse' },
 ];
 
-const ORDER: SearchStage[] = ['starting', ...STEPS.map((s) => s.stage), 'done'];
+const ORDER: SearchStage[] = ['starting', ...STEPS.map((s) => s.stage), 'done', 'failed'];
 
 function elapsed(from: number): string {
   const seconds = Math.max(0, Math.round((Date.now() - from) / 1000));
@@ -42,14 +42,18 @@ export default function SearchProgressView({
   }, []);
 
   const currentIndex = progress ? ORDER.indexOf(progress.stage) : 0;
+  const isFailed = progress?.stage === 'failed';
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-ink-900/60 p-4">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-[15.5px] font-semibold text-mist-100">
-          {progress?.message ?? 'Starting…'}
+        <p className={`text-[15.5px] font-semibold ${isFailed ? 'text-red-700' : 'text-mist-100'}`}>
+          {isFailed
+            ? (progress?.message ?? 'Search failed')
+            : (progress?.message ?? 'Starting…')
+          }
         </p>
-        <span className="shrink-0 font-mono text-[16px] tabular-nums text-mist-400">
+        <span className={`shrink-0 font-mono text-[16px] tabular-nums ${isFailed ? 'text-red-700' : 'text-mist-400'}`}>
           {elapsed(startedAt)}
         </span>
       </div>
@@ -67,17 +71,25 @@ export default function SearchProgressView({
                 className={`mt-[3px] grid h-4 w-4 shrink-0 place-items-center rounded-full text-[9px] font-bold ${
                   done
                     ? 'bg-emerald-500/20 text-emerald-700'
-                    : active
-                      ? 'bg-aqua-500/20 text-aqua-300'
-                      : 'bg-slate-50 text-mist-600'
+                    : active && isFailed
+                      ? 'bg-red-500/20 text-red-700'
+                      : active
+                        ? 'bg-aqua-500/20 text-aqua-300'
+                        : 'bg-slate-50 text-mist-600'
                 }`}
               >
-                {done ? '✓' : index + 1}
+                {done ? '✓' : active && isFailed ? '✕' : index + 1}
               </span>
               <span className="min-w-0">
                 <span
                   className={`block text-[17px] font-medium ${
-                    active ? 'text-aqua-300' : done ? 'text-mist-300' : 'text-mist-500'
+                    active && isFailed
+                      ? 'text-red-700'
+                      : active
+                        ? 'text-aqua-300'
+                        : done
+                          ? 'text-mist-300'
+                          : 'text-mist-500'
                   }`}
                 >
                   {step.label}
@@ -94,7 +106,9 @@ export default function SearchProgressView({
               {active && (
                 <span
                   aria-hidden
-                  className="ml-auto mt-[5px] h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-aqua-400"
+                  className={`ml-auto mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full ${
+                    isFailed ? 'bg-red-400' : 'animate-pulse bg-aqua-400'
+                  }`}
                 />
               )}
             </li>
@@ -103,8 +117,12 @@ export default function SearchProgressView({
       </ol>
 
       <p className="mt-3 border-t border-slate-200 pt-2.5 text-[15.5px] leading-snug text-mist-500">
-        Relevance checking and translation run on your local AI model, so a large
-        city can take several minutes. You can leave this running.
+        {progress?.error ? (
+          <span className="text-red-700">{progress.error}</span>
+        ) : (
+          'Relevance checking and translation run on your local AI model, so a large '
+            + 'city can take several minutes. You can leave this running.'
+        )}
       </p>
 
       <button

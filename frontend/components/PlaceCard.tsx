@@ -11,6 +11,7 @@ interface PlaceCardProps {
   downloading: boolean;
   onSelect: (place: Place) => void;
   onDownload: (place: Place) => void;
+  onAddSuggestion?: (place: Place) => void;
 }
 
 /** Deterministic hue from the name so imageless cards still look intentional. */
@@ -28,6 +29,7 @@ export default function PlaceCard({
   downloading,
   onSelect,
   onDownload,
+  onAddSuggestion,
 }: PlaceCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
@@ -150,6 +152,22 @@ export default function PlaceCard({
 
       {/* Actions */}
       <div className="flex items-center gap-1.5 border-t border-slate-200 px-3 py-2">
+        {onAddSuggestion && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onAddSuggestion(place);
+            }}
+            className="flex items-center gap-1 rounded-lg border border-aqua-500/30 bg-aqua-500/10 px-2.5 py-1.5 text-[16px] font-semibold text-aqua-300 transition hover:border-aqua-500/50 hover:bg-aqua-500/20"
+            title={`Search for "${place.categoryLabel}" in ${city}`}
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
+              <path fill="currentColor" d="M12 4v16m-8-8h16" />
+            </svg>
+            Add
+          </button>
+        )}
         <button
           type="button"
           disabled={downloading}

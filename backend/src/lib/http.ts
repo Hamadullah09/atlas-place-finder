@@ -1,5 +1,6 @@
 import { config } from '../config.js';
 import { cancelSignal } from './cancel.js';
+import { isOffline, noteUpstreamFailure, noteUpstreamSuccess, OfflineError } from './connectivity.js';
 
 export class HttpError extends Error {
   constructor(
@@ -66,6 +67,7 @@ export async function fetchWithPolicy(url: string, options: FetchOptions = {}): 
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     cancel?.throwIfAborted();
+    if (isOffline() && attempt > 0) throw new OfflineError();
 
     if (!skipThrottle) {
       const wait = reserveSlot(host);
@@ -105,9 +107,11 @@ export async function fetchWithPolicy(url: string, options: FetchOptions = {}): 
         );
       }
 
+      noteUpstreamSuccess();
       return response;
     } catch (error) {
       lastError = error;
+      noteUpstreamFailure(error);
       if (cancel?.aborted) throw cancel.reason;
       // A non-retryable HTTP error should surface immediately.
       if (error instanceof HttpError && !RETRYABLE_STATUS.has(error.status)) throw error;
@@ -115,6 +119,8 @@ export async function fetchWithPolicy(url: string, options: FetchOptions = {}): 
       await sleep(800 * 2 ** attempt);
     }
   }
+
+  if (isOffline()) throw new OfflineError();
 
   throw lastError instanceof Error
     ? lastError

@@ -40,3 +40,7 @@ backend/src/eval/reports/
 
 # Local agent/editor config
 .claude/
+
+# Tauri desktop shell: Rust build output and the server copied in at build time.
+desktop/src-tauri/target/
+desktop/src-tauri/resources/

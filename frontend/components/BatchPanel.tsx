@@ -2,15 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  API_BASE_URL,
   browseFolder,
   cancelBatch,
   fetchBatchJob,
   fetchRunningBatchJob,
+  fetchWithTimeout,
+  getNetworkStatus,
+  isOffline,
+  NetworkError,
+  onNetworkStatusChange,
+  refreshNetworkStatus,
   previewBatchCsv,
+  retryBatchRows,
   startBatch,
   type BatchJob,
   type BatchPreview,
   type BatchRowStatus,
+  type NetworkStatus,
 } from '@/lib/api';
 import { ALL_PLACES, QUICK_PICKS, isAll, keywordParts } from './SearchForm';
 
@@ -44,6 +53,8 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
   const [hintVisible, setHintVisible] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>(getNetworkStatus);
+  const [pollFailures, setPollFailures] = useState(0);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -57,6 +68,18 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
     return () => controller.abort();
   }, []);
 
+  // Track network status changes
+  useEffect(() => {
+    const unsubscribe = onNetworkStatusChange((status) => {
+      setNetworkStatus(status);
+      if (status === 'online') {
+        setPollFailures(0);
+        setError(null);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
   useEffect(() => {
     if (!job || job.status !== 'running') {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -65,9 +88,45 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
     }
 
     pollRef.current = setInterval(() => {
-      void fetchBatchJob(job.id).then((next) => {
-        if (next) setJob(next);
-      });
+      // Keep polling through an outage: the job lives on this machine, and
+      // this is also how the UI finds out the connection is back.
+      void refreshNetworkStatus();
+
+      fetchWithTimeout(`${API_BASE_URL}/api/batch/${encodeURIComponent(job.id)}`, {
+        timeoutMs: 10_000,
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`${response.status}`);
+          const payload = (await response.json()) as { job: BatchJob };
+          if (payload.job) {
+            setJob(payload.job);
+            setPollFailures(0);
+            if (payload.job.networkDown) {
+              setNetworkStatus('offline');
+              setError('No internet connection. Waiting for connection to return…');
+            } else {
+              // The server is working again, so clear the outage notice.
+              setError((previous) => (previous?.startsWith('No internet') ? null : previous));
+            }
+          }
+        })
+        .catch((error: unknown) => {
+          setPollFailures((prev) => {
+            const next = prev + 1;
+            if (error instanceof NetworkError) {
+              if (error.kind === 'no-internet') {
+                setError('No internet connection. Waiting for connection to return…');
+              } else if (error.kind === 'timeout') {
+                setError('Batch polling timed out. The server may be overloaded.');
+              } else {
+                setError(`Connection error: ${error.message}`);
+              }
+            } else if (next >= 3) {
+              setError('Lost connection to the server. Check your network and try again.');
+            }
+            return next;
+          });
+        });
     }, POLL_MS);
 
     return () => {
@@ -98,6 +157,10 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
 
   const handleStart = useCallback(async () => {
     if (!csvText) return;
+    if (isOffline()) {
+      setError('No internet connection. Please check your network and try again.');
+      return;
+    }
     setStarting(true);
     setError(null);
     try {
@@ -112,7 +175,17 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
       });
       setJob(started);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      if (caught instanceof NetworkError) {
+        if (caught.kind === 'no-internet') {
+          setError('No internet connection. Please check your network and try again.');
+        } else if (caught.kind === 'timeout') {
+          setError('Request timed out. The server may be overloaded — try again shortly.');
+        } else {
+          setError(`Failed to start batch: ${caught.message}`);
+        }
+      } else {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
 
       // Most likely cause: a run from another tab or an earlier session is
       // still going. Adopt it so the operator can watch or cancel it here
@@ -410,7 +483,25 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             </button>
           )}
         </div>
-        {error && <p className="mt-2 text-[16px] text-red-700">{error}</p>}
+        {error && (
+          <div className="mt-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] p-3">
+            <p className="text-[15.5px] font-semibold text-red-700">{error}</p>
+            {pollFailures >= 3 && running && (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setPollFailures(0);
+                  // Force re-poll by updating job reference
+                  setJob((prev) => prev ? { ...prev } : null);
+                }}
+                className="mt-2 rounded-lg border border-red-500/30 px-3 py-1.5 text-[14.5px] font-semibold text-red-700 transition hover:bg-red-500/10"
+              >
+                Retry connection
+              </button>
+            )}
+          </div>
+        )}
       </section>
       </div>
 
@@ -418,6 +509,24 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
       {job && progress && (
         <section className="mt-4 flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-ink-850/70 p-4">
           <SectionTitle step="3" title="Progress" />
+
+          {networkStatus === 'offline' && (
+            <div className="mt-2 flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-[15.5px] font-medium text-amber-700">
+                No internet connection — batch will resume when the connection returns.
+              </span>
+            </div>
+          )}
+
+          {networkStatus === 'checking' && (
+            <div className="mt-2 flex items-center gap-2 rounded-xl border border-aqua-500/25 bg-aqua-500/10 px-3 py-2">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-aqua-400 animate-pulse" />
+              <span className="text-[15.5px] font-medium text-aqua-300">
+                Reconnecting…
+              </span>
+            </div>
+          )}
 
           <div className="mt-2 flex items-center justify-between text-[14.5px] text-mist-300">
             <span>
@@ -470,6 +579,20 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                       </span>
                     )}
                   </span>
+                  {row.status === 'failed' && job.id && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void retryBatchRows(job.id, index)
+                          .then(() => fetchBatchJob(job.id))
+                          .then((next) => { if (next) setJob(next); })
+                          .catch(() => undefined);
+                      }}
+                      className="shrink-0 rounded-md border border-slate-300 px-2 py-0.5 text-[14px] font-semibold text-mist-300 transition hover:border-aqua-500 hover:text-aqua-300"
+                    >
+                      Retry
+                    </button>
+                  )}
                   <span
                     className={`shrink-0 ${meta.className}`}
                     title={

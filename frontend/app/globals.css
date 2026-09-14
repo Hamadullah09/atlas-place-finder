@@ -174,6 +174,23 @@ body {
   animation: rise 0.18s ease-out both;
 }
 
+/* The "add another kind" field, opening out of the chip row it replaces. */
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px) scaleX(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scaleX(1);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.18s ease-out both;
+  transform-origin: left center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
