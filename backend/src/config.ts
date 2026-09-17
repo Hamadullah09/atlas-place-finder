@@ -244,9 +244,11 @@ export const config = {
    * tried in order; the first that answers is remembered for the process.
    * The mobile domain usually survives filtering that catches the main one.
    */
+  // commons.m.wikimedia.org is gone from the defaults: Wikimedia now
+  // redirects it to commons.wikimedia.org, so on a network blocking that host
+  // it only added a slow failure. The Wikimedia API gateway is the fallback.
   commonsHosts: list(process.env.COMMONS_HOSTS, [
     'commons.wikimedia.org',
-    'commons.m.wikimedia.org',
   ]),
 
   /** Long-form research content pulled per place for the PDF write-up. */

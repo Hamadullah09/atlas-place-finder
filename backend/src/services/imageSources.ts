@@ -193,6 +193,8 @@ export async function commonsGeoSearch<TInfo>(
   limit: number,
   commonsApi: <T>(params: Record<string, string | number | boolean | undefined>) => Promise<T | null>,
   toImage: (info: TInfo, source: PlaceImage['source'], title?: string) => PlaceImage | null,
+  /** Used when Commons itself cannot be reached. */
+  viaGateway?: (limit: number) => Promise<PlaceImage[]>,
 ): Promise<PlaceImage[]> {
   if (limit <= 0) return [];
 
@@ -212,6 +214,9 @@ export async function commonsGeoSearch<TInfo>(
     iiurlwidth: 2560,
     origin: '*',
   });
+
+  // Commons blocked: the same position search, through its search engine.
+  if (payload === null && viaGateway) return viaGateway(limit);
 
   const images: PlaceImage[] = [];
   for (const page of Object.values(payload?.query?.pages ?? {})) {

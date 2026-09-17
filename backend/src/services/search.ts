@@ -7,7 +7,7 @@ import { cacheKeyFor, getStore } from './cache.js';
 import { discoverViaNominatim, discoverViaWikidata } from './discovery.js';
 import { geocodeCity } from './geocode.js';
 import { runGoogleSearch } from './googleSearch.js';
-import { fetchImagesForPlaces, selectIllustrated, isCommonsUnreachable } from './images.js';
+import { fetchImagesForPlaces, selectIllustrated, isCommonsUnreachable, isCommonsViaGateway } from './images.js';
 import { enrichPlaces } from './llm.js';
 import { dedupePlaces, informationScore, searchOverpass } from './overpass.js';
 import { setStage, type SearchProgress } from './progress.js';
@@ -327,9 +327,13 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
 
     if (isCommonsUnreachable()) {
       warnings.push(
-        'Wikimedia Commons is unreachable from this server, so category and Commons-search '
-          + 'imagery was skipped (Wikipedia and Openverse still worked). Some networks block '
-          + 'commons.wikimedia.org by SNI — set COMMONS_HOSTS to a reachable mirror.',
+        'Wikimedia Commons could not be reached, directly or through the Wikimedia API '
+          + 'gateway, so its photos were skipped (Wikipedia and Openverse still worked).',
+      );
+    } else if (isCommonsViaGateway()) {
+      warnings.push(
+        'commons.wikimedia.org is blocked on this network, so Commons photos were fetched '
+          + 'through the Wikimedia API gateway instead. Results are complete but slower.',
       );
     }
   }

@@ -59,10 +59,18 @@ function bundleSharp(outDir) {
   console.log(`  bundled sharp + ${copied.size - 1} dependencies`);
 }
 
-/** Short commit of the tree being packaged; empty outside a git checkout. */
+/**
+ * Short commit of the tree being packaged; empty outside a git checkout.
+ *
+ * Marked -dirty when there are uncommitted changes: otherwise a build of
+ * edited code claims to be the last commit, and two different binaries carry
+ * the same stamp -- the confusion the stamp exists to prevent.
+ */
 function gitCommit() {
   try {
-    return execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
+    const sha = execSync('git rev-parse --short HEAD', { cwd: root }).toString().trim();
+    const dirty = execSync('git status --porcelain', { cwd: root }).toString().trim().length > 0;
+    return dirty ? `${sha}-dirty` : sha;
   } catch {
     return '';
   }

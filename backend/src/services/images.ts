@@ -16,7 +16,19 @@ const WIKIDATA_API = 'https://www.wikidata.org/w/api.php';
  * configured alternatives and remember whichever answers.
  */
 let workingCommonsHost: string | null = null;
-let commonsUnreachable = false;
+
+/**
+ * Until when Commons' own API is assumed blocked. Each failed attempt costs
+ * seconds per host, and a search makes hundreds of them, so after one
+ * confirmed failure the doomed hosts are skipped for a while.
+ */
+let commonsActionApiDownUntil = 0;
+const COMMONS_RETRY_AFTER_MS = 5 * 60_000;
+
+/** Whether the API gateway fallback is also failing. */
+let commonsGatewayFailing = false;
+/** Whether any photo this session had to come through the gateway. */
+let commonsGatewayUsed = false;
 
 function commonsHostOrder(extra: string[] = []): string[] {
   const hosts = [...config.commonsHosts, ...extra];
@@ -24,9 +36,17 @@ function commonsHostOrder(extra: string[] = []): string[] {
   return [workingCommonsHost, ...hosts.filter((host) => host !== workingCommonsHost)];
 }
 
-/** True once every configured Commons host has failed at least once. */
+/**
+ * True when Commons imagery was actually lost: its own API is blocked and the
+ * gateway fallback failed too. A blocked host alone no longer loses anything.
+ */
 export function isCommonsUnreachable(): boolean {
-  return commonsUnreachable;
+  return Date.now() < commonsActionApiDownUntil && commonsGatewayFailing;
+}
+
+/** True when Commons was blocked but its photos arrived through the gateway. */
+export function isCommonsViaGateway(): boolean {
+  return commonsGatewayUsed && !commonsGatewayFailing;
 }
 
 async function commonsApi<T>(
@@ -36,23 +56,30 @@ async function commonsApi<T>(
   // `prop=imageinfo` on a File: title also resolves through any wiki that uses
   // Commons as a shared repo, so Wikipedia is a safe last resort for those.
   // Category listings are NOT safe that way — enwiki has its own categories.
-  const hosts = commonsHostOrder(options.imageInfoOnly ? ['en.wikipedia.org'] : []);
+  const commonsBlocked = Date.now() < commonsActionApiDownUntil;
+  const hosts = commonsHostOrder(options.imageInfoOnly ? ['en.wikipedia.org'] : [])
+    // Wikipedia is not Commons and is not subject to the block.
+    .filter((host) => !commonsBlocked || !config.commonsHosts.includes(host));
 
+  let commonsTried = false;
   for (const host of hosts) {
+    const isCommons = config.commonsHosts.includes(host);
     try {
       const payload = await fetchJson<T>(`https://${host}/w/api.php?${qs(params)}`, {
         timeoutMs: 25_000,
         retries: 1,
       });
       workingCommonsHost = host;
-      commonsUnreachable = false;
+      if (isCommons) commonsActionApiDownUntil = 0;
       return payload;
     } catch {
+      if (isCommons) commonsTried = true;
       // Try the next host.
     }
   }
 
-  commonsUnreachable = true;
+  // Only a Commons host failing says anything about Commons being blocked.
+  if (commonsTried) commonsActionApiDownUntil = Date.now() + COMMONS_RETRY_AFTER_MS;
   return null;
 }
 
@@ -170,6 +197,68 @@ function buildCommonsThumb(info: CommonsImageInfo, width: number): string | unde
   if (!info.thumburl) return undefined;
   return info.thumburl.replace(/\/\d+px-/, `/${width}px-`);
 }
+
+const COMMONS_GATEWAY = 'https://api.wikimedia.org/core/v1/commons/search/page';
+
+/** File titles from Commons' search engine, via the Wikimedia API gateway. */
+async function commonsGatewayTitles(query: string, limit: number): Promise<string[]> {
+  try {
+    const payload = await fetchJson<{ pages?: Array<{ key?: string }> }>(
+      `${COMMONS_GATEWAY}?${qs({ q: query, limit: Math.min(Math.max(limit, 1), 100) })}`,
+      { timeoutMs: 20_000, retries: 1 },
+    );
+    commonsGatewayFailing = false;
+    return (payload.pages ?? [])
+      .map((page) => page.key ?? '')
+      // incategory: also returns subcategories and galleries.
+      .filter((key) => key.startsWith('File:'))
+      .map((key) => key.replace(/_/g, ' '));
+  } catch {
+    commonsGatewayFailing = true;
+    return [];
+  }
+}
+
+/**
+ * The same photos Commons would have given, reached another way.
+ *
+ * Titles come from the gateway; size, licence and author come from the
+ * imageinfo lookup, which falls back to Wikipedia and so survives the block.
+ */
+export async function commonsFilesViaGateway(
+  query: string,
+  limit: number,
+  source: PlaceImage['source'],
+): Promise<PlaceImage[]> {
+  if (limit <= 0) return [];
+
+  // Oversampled: some titles are not images, and many fall below the HD bar.
+  const titles = await commonsGatewayTitles(query, limit * 3);
+  if (titles.length === 0) return [];
+  commonsGatewayUsed = true;
+
+  const infos = await commonsImageInfo(titles);
+  const images: PlaceImage[] = [];
+  for (const title of titles) {
+    const image = infos.get(title);
+    if (image) images.push({ ...image, source });
+  }
+  return images;
+}
+
+/** Builds the gateway queries, kept pure so their syntax can be tested. */
+export const commonsGatewayQuery = {
+  search: (text: string) => `filetype:bitmap ${text}`.trim(),
+  category: (category: string) => {
+    const name = category.replace(/^Category:/, '').replace(/"/g, '').trim();
+    return `filetype:bitmap incategory:"${name}"`;
+  },
+  near: (lat: number, lon: number, radiusKm: number) => {
+    // Metres, rounded: the search engine takes whole units.
+    const metres = Math.max(1, Math.round(Math.min(radiusKm, 10) * 1000));
+    return `filetype:bitmap nearcoord:${metres}m,${lat.toFixed(6)},${lon.toFixed(6)}`;
+  },
+};
 
 async function commonsImageInfo(titles: string[]): Promise<Map<string, PlaceImage>> {
   const output = new Map<string, PlaceImage>();
@@ -299,6 +388,11 @@ async function commonsCategoryImages(category: string, limit: number): Promise<P
     origin: '*',
   });
 
+  // Commons blocked: list the category through its search engine instead.
+  if (payload === null) {
+    return commonsFilesViaGateway(commonsGatewayQuery.category(title), limit, 'commons-category');
+  }
+
   const images: PlaceImage[] = [];
   for (const page of Object.values(payload?.query?.pages ?? {})) {
     const info = page.imageinfo?.[0];
@@ -424,6 +518,10 @@ async function commonsSearch(query: string, limit: number): Promise<PlaceImage[]
     iiurlwidth: 2560,
     origin: '*',
   });
+
+  if (payload === null) {
+    return commonsFilesViaGateway(commonsGatewayQuery.search(query), limit, 'commons');
+  }
 
   const images: PlaceImage[] = [];
   for (const page of Object.values(payload?.query?.pages ?? {})) {
@@ -693,7 +791,17 @@ export async function fetchImagesForPlaces(
     // only at these coordinates. Needs no API key.
     if (short()) {
       collected.push(
-        ...(await commonsGeoSearch(place, perPlace - collected.length, commonsApi, toPlaceImage)),
+        ...(await commonsGeoSearch(
+          place,
+          perPlace - collected.length,
+          commonsApi,
+          toPlaceImage,
+          (limit) => commonsFilesViaGateway(
+            commonsGatewayQuery.near(place.lat, place.lon, config.images.geoRadiusKm),
+            limit,
+            'commons-geo',
+          ),
+        )),
       );
     }
 

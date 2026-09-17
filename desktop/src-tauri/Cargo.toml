@@ -15,6 +15,16 @@ tauri = { version = "2", features = [] }
 # a small client keeps the shell's build time and binary size down.
 ureq = "2"
 
+# Job objects, so the server cannot outlive the shell however the shell ends.
+# Already in the dependency tree through tauri; this only enables bindings.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
 [profile.release]
 codegen-units = 1
 lto = true
