@@ -41,9 +41,12 @@ if (!skipServer || !existsSync(path.join(editionDir, 'SMA-Place-Finder.exe'))) {
 rmSync(resources, { recursive: true, force: true });
 mkdirSync(resources, { recursive: true });
 
+// Not "SMA-Place-Finder.exe": Tauri stages resources beside the compiled
+// shell, whose binary is sma-place-finder.exe, and Windows would treat the
+// two as one file and overwrite the shell.
 cpSync(
   path.join(editionDir, 'SMA-Place-Finder.exe'),
-  path.join(resources, 'SMA-Place-Finder.exe'),
+  path.join(resources, 'place-finder-server.exe'),
 );
 // sharp is native, so it lives beside the server rather than inside it. The
 // server looks for node_modules next to its own executable, which is where

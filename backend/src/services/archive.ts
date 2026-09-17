@@ -5,6 +5,7 @@ import archiver from 'archiver';
 import { config, isPackaged } from '../config.js';
 import { mapLimit } from '../lib/concurrency.js';
 import { fetchBuffer } from '../lib/http.js';
+import { fetchPublicImage } from '../lib/publicUrl.js';
 import { createNameDeduper, sanitizePathSegment } from '../lib/sanitize.js';
 import { fetchContentForPlaces } from './content.js';
 import { excerptsForPlace, type ExtraSourceDoc } from './extraSources.js';
@@ -103,15 +104,17 @@ async function downloadPlaceImages(
   if (images.length === 0) return [];
 
   const settled = await mapLimit(images, 3, async (image, index) => {
-    // Never fetch a URL that didn't come from our own image pipeline.
-    if (!isAllowedImageUrl(image.downloadUrl)) {
-      throw new Error(`image host not allowed: ${safeHost(image.downloadUrl)}`);
-    }
-
-    const { buffer, contentType } = await fetchBuffer(image.downloadUrl, {
-      timeoutMs: 45_000,
-      retries: 1,
-    });
+    // Web-search results point at whatever site published the photo, so no
+    // allowlist can cover them; they must instead reach a public address.
+    // Everything else still has to come from a known image host.
+    const { buffer, contentType } = image.source === 'brave'
+      ? await fetchPublicImage(image.downloadUrl)
+      : await (async () => {
+        if (!isAllowedImageUrl(image.downloadUrl)) {
+          throw new Error(`image host not allowed: ${safeHost(image.downloadUrl)}`);
+        }
+        return fetchBuffer(image.downloadUrl, { timeoutMs: 45_000, retries: 1 });
+      })();
     notifyUnsplashDownload(image.sourcePage);
 
     const jpeg = await toJpeg(buffer, contentType);

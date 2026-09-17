@@ -6,12 +6,14 @@ import type { PlaceImage, RawPlace } from '../types.js';
 /**
  * Additional free image sources, all properly licensed for redistribution.
  *
- * Deliberately NOT here: scraping Google/Bing/Yahoo image search. Those
- * results are overwhelmingly all-rights-reserved, and this app embeds imagery
- * into PDFs and ZIPs that users keep and share — redistributing them would be
- * a copyright problem, quite apart from the terms of service and the fact that
- * scrapers get blocked within weeks. Everything below is either CC-licensed,
- * public domain, or explicitly cleared for reuse.
+ * Deliberately NOT here: scraping Google/Bing/Yahoo image search. That breaches
+ * their terms, and scrapers get blocked within weeks.
+ *
+ * Everything below is CC-licensed, public domain or cleared for reuse, except
+ * braveImageSearch, which uses an official paid API and is off unless a key
+ * is configured. Its results are mostly all-rights-reserved; this app embeds
+ * imagery in PDFs and ZIPs people keep and share, so each one is labelled as
+ * of unknown licence with a link to where it was found.
  *
  * The important idea here is GEOGRAPHIC search. Matching a place by name is
  * unreliable ("Bell Tower" exists in a hundred cities); searching for photos
@@ -220,4 +222,80 @@ export async function commonsGeoSearch<TInfo>(
     if (images.length >= limit) break;
   }
   return images;
+}
+
+// ---------------------------------------------------------------------------
+// Brave image search (official API, opt-in)
+// ---------------------------------------------------------------------------
+
+/** Field names as documented at api-dashboard.search.brave.com. */
+interface BraveImageResult {
+  title?: string | null;
+  /** The page the image appears on. */
+  url?: string | null;
+  source?: string | null;
+  thumbnail?: { src?: string | null } | null;
+  properties?: {
+    /** The original, full-size image. */
+    url?: string | null;
+    width?: number | null;
+    height?: number | null;
+  } | null;
+  meta_url?: { hostname?: string | null } | null;
+  confidence?: 'low' | 'medium' | 'high' | null;
+}
+
+/**
+ * Web image search, for places the licensed sources cannot illustrate.
+ *
+ * Only high- and medium-confidence matches are kept: a low-confidence hit for
+ * "Bell Tower Xi'an" is as likely to be a different tower.
+ */
+export async function braveImageSearch(query: string, limit: number): Promise<PlaceImage[]> {
+  if (!config.images.braveApiKey || limit <= 0) return [];
+
+  const url = `https://api.search.brave.com/res/v1/images/search?${qs({
+    q: query,
+    // Oversampled: many results fall below the HD threshold.
+    count: Math.min(Math.max(limit * 4, 20), 100),
+    safesearch: 'strict',
+  })}`;
+
+  try {
+    const payload = await fetchJson<{ results?: BraveImageResult[] }>(url, {
+      timeoutMs: 20_000,
+      retries: 1,
+      headers: {
+        'X-Subscription-Token': config.images.braveApiKey,
+        Accept: 'application/json',
+      },
+    });
+
+    const images: PlaceImage[] = [];
+    for (const result of payload.results ?? []) {
+      const full = result.properties?.url;
+      if (!full || !full.startsWith('https://')) continue;
+      if (result.confidence === 'low') continue;
+
+      // The thumbnail is served through Brave's own proxy, so the browser
+      // shows it without hotlinking the publisher; the ZIP gets the original.
+      const thumb = result.thumbnail?.src ?? full;
+      images.push({
+        url: thumb,
+        downloadUrl: full,
+        thumbUrl: thumb,
+        width: result.properties?.width ?? undefined,
+        height: result.properties?.height ?? undefined,
+        source: 'brave',
+        title: cleanText(result.title ?? '') || undefined,
+        credit: result.meta_url?.hostname ?? result.source ?? undefined,
+        license: 'Unknown — found by web search; check the source page before reuse',
+        sourcePage: result.url ?? undefined,
+      });
+      if (images.length >= limit) break;
+    }
+    return images;
+  } catch {
+    return [];
+  }
 }

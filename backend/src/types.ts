@@ -27,7 +27,8 @@ export type ImageSource =
   | 'europeana'
   | 'openverse'
   | 'unsplash'
-  | 'google';
+  | 'google'
+  | 'brave';
 
 /** A labelled fact lifted from a Wikidata statement. */
 export interface WikidataFact {

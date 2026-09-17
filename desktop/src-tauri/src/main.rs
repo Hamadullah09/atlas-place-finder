@@ -7,11 +7,19 @@
 // for the user to know about.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::os::windows::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+
+/// Keeps Windows from giving the server its own console window.
+///
+/// The server is a console program, so launching it from a windowed app opens
+/// a black box on top of the UI -- redirecting its output does not prevent it,
+/// only this flag does.
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The server takes the first free port in this range, so the shell has to look
 /// for it rather than assume one. Matches PORT_ATTEMPTS in the server.
@@ -23,6 +31,11 @@ const PORT_ATTEMPTS: u16 = 10;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Keeps the server handle so it can be stopped when the window closes.
+///
+/// Drop alone is not enough: the process can exit by paths that skip
+/// destructors, which left the server running with the window gone -- an
+/// invisible process holding the port. The exit event below is the reliable
+/// hook; this stays as a backstop.
 struct Server(Mutex<Option<Child>>);
 
 impl Drop for Server {
@@ -65,7 +78,7 @@ fn start_server(app: &tauri::App) -> Result<Option<Child>, String> {
 
     let exe = app
         .path()
-        .resolve("SMA-Place-Finder.exe", tauri::path::BaseDirectory::Resource)
+        .resolve("place-finder-server.exe", tauri::path::BaseDirectory::Resource)
         .map_err(|error| format!("cannot locate the bundled server: {error}"))?;
 
     let working_dir = exe
@@ -73,6 +86,7 @@ fn start_server(app: &tauri::App) -> Result<Option<Child>, String> {
         .ok_or_else(|| "bundled server has no parent directory".to_string())?;
 
     let child = Command::new(&exe)
+        .creation_flags(CREATE_NO_WINDOW)
         .current_dir(working_dir)
         // Without this the server opens a browser tab as well as this window.
         .env("PLACE_FINDER_NO_BROWSER", "1")
@@ -123,6 +137,19 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("failed to start SMA Place Finder");
+        .build(tauri::generate_context!())
+        .expect("failed to start SMA Place Finder")
+        .run(|handle, event| {
+            // Closing the window ends the session, so the server goes too.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(server) = handle.try_state::<Server>() {
+                    if let Ok(mut guard) = server.0.lock() {
+                        if let Some(mut child) = guard.take() {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                    }
+                }
+            }
+        });
 }

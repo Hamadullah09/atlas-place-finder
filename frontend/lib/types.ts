@@ -1,5 +1,9 @@
 export type OsmType = 'node' | 'way' | 'relation';
-export type ImageSource = 'wikidata' | 'wikipedia' | 'commons' | 'unsplash';
+// Mirrors the backend union; it had drifted to four of the twelve sources.
+export type ImageSource =
+  | 'wikidata' | 'wikipedia' | 'commons' | 'commons-category' | 'commons-geo'
+  | 'wikipedia-article' | 'flickr' | 'europeana' | 'openverse' | 'unsplash'
+  | 'google' | 'brave';
 
 export interface PlaceImage {
   url: string;

@@ -2,7 +2,7 @@ import { config } from '../config.js';
 import { mapLimitSettled, chunk } from '../lib/concurrency.js';
 import { fetchJson, qs } from '../lib/http.js';
 import { cleanText } from '../lib/sanitize.js';
-import { commonsGeoSearch, europeanaSearch, flickrGeoSearch } from './imageSources.js';
+import { commonsGeoSearch, europeanaSearch, braveImageSearch, flickrGeoSearch } from './imageSources.js';
 import type { PlaceImage, RawPlace } from '../types.js';
 
 const WIKIDATA_API = 'https://www.wikidata.org/w/api.php';
@@ -545,17 +545,53 @@ function rankImages(images: PlaceImage[]): PlaceImage[] {
     commons: 3, // free-text search from here down
     openverse: 2,
     unsplash: 1, // generic stock
+    brave: 0, // web search: unknown licence, so only ever the fallback
   };
 
   return unique.sort((a, b) => {
-    const aHd = (a.width ?? 0) >= config.minImageWidth ? 1 : 0;
-    const bHd = (b.width ?? 0) >= config.minImageWidth ? 1 : 0;
+    const aHd = isHdImage(a) ? 1 : 0;
+    const bHd = isHdImage(b) ? 1 : 0;
     if (aHd !== bHd) return bHd - aHd;
     if (sourceWeight[a.source] !== sourceWeight[b.source]) {
       return sourceWeight[b.source] - sourceWeight[a.source];
     }
     return (b.width ?? 0) - (a.width ?? 0);
   });
+}
+
+/**
+ * Whether an image meets the HD bar.
+ *
+ * Measured on the long edge: a 1200x1800 portrait of a tower is as sharp as
+ * a 1800x1200 landscape, and judging width alone would throw it away. An
+ * image that does not report its size cannot be shown to meet the bar.
+ */
+export function isHdImage(image: Pick<PlaceImage, 'width' | 'height'>): boolean {
+  return Math.max(image.width ?? 0, image.height ?? 0) >= config.minImageWidth;
+}
+
+/** Images that count towards a place's quota under the current policy. */
+function countTowardsQuota(images: PlaceImage[]): number {
+  return config.requireImages ? images.filter(isHdImage).length : images.length;
+}
+
+/**
+ * The places to report, when a photo is mandatory.
+ *
+ * Keeps the ranking order, drops anything without an image, and stops at
+ * the requested count -- more candidates are looked up than will be kept,
+ * precisely so this still has enough to choose from.
+ */
+export function selectIllustrated<T extends { id: string }>(
+  ranked: T[],
+  imagesByPlace: Map<string, PlaceImage[]>,
+  limit: number,
+): { kept: T[]; withoutImages: number } {
+  const illustrated = ranked.filter((place) => (imagesByPlace.get(place.id)?.length ?? 0) > 0);
+  return {
+    kept: illustrated.slice(0, limit),
+    withoutImages: ranked.length - illustrated.length,
+  };
 }
 
 export interface ImageLookupOptions {
@@ -606,11 +642,14 @@ export async function fetchImagesForPlaces(
   }
 
   // --- Pass 2+: everything else, per place, cheapest-and-surest first -----
-  const needsMore = places.filter((place) => (result.get(place.id)?.length ?? 0) < perPlace);
+  // Low-resolution hits must not fill the quota: a place holding ten small
+  // thumbnails would stop searching and then be dropped for having no HD
+  // photo, when a later source had one.
+  const needsMore = places.filter((place) => countTowardsQuota(result.get(place.id) ?? []) < perPlace);
 
   await mapLimitSettled(needsMore, 4, async (place) => {
     const collected = [...(result.get(place.id) ?? [])];
-    const short = () => collected.length < perPlace;
+    const short = () => countTowardsQuota(collected) < perPlace;
 
     // 2. The article's lead image — guaranteed to depict this place.
     const wikipediaTag = place.tags.wikipedia ?? place.tags['wikipedia:en'];
@@ -688,12 +727,25 @@ export async function fetchImagesForPlaces(
       collected.push(...(await unsplashSearch(query, perPlace - collected.length)));
     }
 
+    // 8. Web image search: only when configured, and only for what the
+    //    licensed sources above could not fill. One query per place -- it is
+    //    paid per request.
+    if (short() && allowTextSearch && config.images.braveApiKey) {
+      const query = `${place.name} ${options.city} ${options.country}`.trim();
+      collected.push(...(await braveImageSearch(query, perPlace - countTowardsQuota(collected))));
+    }
+
     if (collected.length > 0) result.set(place.id, collected);
   });
 
   // --- Rank and trim ------------------------------------------------------
   for (const [placeId, images] of result) {
-    result.set(placeId, rankImages(images).slice(0, perPlace));
+    const eligible = config.requireImages ? images.filter(isHdImage) : images;
+    if (eligible.length === 0) {
+      result.delete(placeId);
+      continue;
+    }
+    result.set(placeId, rankImages(eligible).slice(0, perPlace));
   }
 
   dedupeAcrossPlaces(places, result);

@@ -23,12 +23,15 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/SMA-Place-Finder.exe": "SMA-Place-Finder.exe",
+      "resources/place-finder-server.exe": "place-finder-server.exe",
       "resources/node_modules": "node_modules"
     },
     "shortDescription": "Find and export places anywhere",
     "longDescription": "Search OpenStreetMap for places in any city, research them against Wikipedia and Wikidata, and export illustrated PDFs.",
     "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false

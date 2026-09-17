@@ -207,21 +207,34 @@ export const config = {
   unsplashAccessKey: str(process.env.UNSPLASH_ACCESS_KEY, ''),
 
   /**
-   * Extra image sources. All free, all licensed for redistribution — which
-   * matters because imagery is embedded in PDFs the user keeps. Search-engine
-   * image results are deliberately not an option here: they are mostly
-   * all-rights-reserved and cannot lawfully be shipped inside an export.
+   * Extra image sources. The free ones are all licensed for redistribution,
+   * which matters because imagery is embedded in PDFs the user keeps.
+   *
+   * Web image search is the exception and is off unless a key is supplied.
+   * Its results are mostly all-rights-reserved, so each is labelled with an
+   * unknown licence and a link to its page, and it only runs for places the
+   * licensed sources could not illustrate. Enabling it is the operator's
+   * decision about what their exports may contain. Scraping search engines
+   * is still not an option: it breaches their terms and is blocked quickly.
    */
   images: {
     /** flickr.com/services/apps/create/apply — CC-licensed, geotagged, huge. */
     flickrApiKey: str(process.env.FLICKR_API_KEY, ''),
     /** pro.europeana.eu/pages/get-api — museums, monuments, archives. */
     europeanaApiKey: str(process.env.EUROPEANA_API_KEY, ''),
+    /** api-dashboard.search.brave.com — paid per query; see the note above. */
+    braveApiKey: str(process.env.BRAVE_SEARCH_API_KEY, ''),
     /** Radius for coordinate-based photo search. Small keeps it on-subject. */
     geoRadiusKm: Number(process.env.IMAGE_GEO_RADIUS_KM ?? 1),
   },
   imagesPerPlace: num(process.env.IMAGES_PER_PLACE, 10),
+  /** HD threshold, applied to the long edge so tall photos qualify too. */
   minImageWidth: num(process.env.MIN_IMAGE_WIDTH, 1600),
+  /**
+   * Leave out any place without at least one HD photo. A write-up with no
+   * picture is not what the export is for, so this is on by default.
+   */
+  requireImages: bool(process.env.REQUIRE_IMAGES, true),
   /** Openverse aggregates ~700M CC-licensed images and needs no API key. */
   openverseEnabled: bool(process.env.OPENVERSE_ENABLED, true),
 

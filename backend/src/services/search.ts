@@ -7,7 +7,7 @@ import { cacheKeyFor, getStore } from './cache.js';
 import { discoverViaNominatim, discoverViaWikidata } from './discovery.js';
 import { geocodeCity } from './geocode.js';
 import { runGoogleSearch } from './googleSearch.js';
-import { fetchImagesForPlaces, isCommonsUnreachable } from './images.js';
+import { fetchImagesForPlaces, selectIllustrated, isCommonsUnreachable } from './images.js';
 import { enrichPlaces } from './llm.js';
 import { dedupePlaces, informationScore, searchOverpass } from './overpass.js';
 import { setStage, type SearchProgress } from './progress.js';
@@ -51,6 +51,13 @@ export interface RunSearchOptions {
  * Filtering runs *before* image lookup so we never spend requests on entries
  * that are about to be discarded.
  */
+/**
+ * Places looked up for photos per place reported, when photos are mandatory.
+ * Enough spare that a city where many places have no HD photo still fills
+ * the requested count, without imaging the whole candidate list.
+ */
+const IMAGE_LOOKUP_OVERSAMPLE = 2;
+
 /** Services every OSM search queries, whatever it finds. */
 const DISCOVERY_SOURCES: SourceLink[] = [
   { label: 'OpenStreetMap Overpass', url: 'https://overpass-api.de/', kind: 'discovery' },
@@ -70,6 +77,7 @@ const IMAGE_SOURCES: Record<string, { label: string; url: string }> = {
   europeana: { label: 'Europeana', url: 'https://www.europeana.eu/' },
   openverse: { label: 'Openverse', url: 'https://openverse.org/' },
   unsplash: { label: 'Unsplash', url: 'https://unsplash.com/' },
+  brave: { label: 'Brave Image Search (licence unknown)', url: 'https://search.brave.com/images' },
   google: { label: 'Google Places', url: 'https://maps.google.com/' },
 };
 
@@ -90,6 +98,8 @@ export function sourceCatalogue(): SourceLink[] {
   for (const [key, info] of Object.entries(IMAGE_SOURCES)) {
     // Google imagery only exists in the Google edition.
     if (key === 'google' && config.placeSource === 'osm') continue;
+    // Web image search is only a source when the operator has enabled it.
+    if (key === 'brave' && !config.images.braveApiKey) continue;
     if (seen.has(info.url.toLowerCase())) continue;
     seen.add(info.url.toLowerCase());
     out.push({ label: info.label, url: info.url, kind: 'image' });
@@ -288,10 +298,15 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   warnings.push(...enrichment.warnings);
 
   const enrichedById = new Map(enrichment.places.map((entry) => [entry.placeId, entry]));
+  // A place without an HD photo is not worth exporting, so it is left out --
+  // unless the operator turned photos off, when there is nothing to require.
+  const requireImages = includeImages && config.requireImages;
   const kept = named
     .filter((place) => enrichedById.get(place.id)?.keep !== false)
     .sort((a, b) => (enrichedById.get(b.id)?.qualityScore ?? 0) - (enrichedById.get(a.id)?.qualityScore ?? 0))
-    .slice(0, limit);
+    // When a photo is mandatory some of these will be dropped, so look up
+    // more than the limit and keep the first that have one.
+    .slice(0, requireImages ? limit * IMAGE_LOOKUP_OVERSAMPLE : limit);
 
   let imagesByPlace = new Map<string, PlaceImage[]>();
   if (includeImages && kept.length > 0) {
@@ -319,7 +334,18 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     }
   }
 
-  const places: Place[] = kept.map((place) => {
+  let reported = kept;
+  if (requireImages) {
+    const { kept: illustrated, withoutImages } = selectIllustrated(kept, imagesByPlace, limit);
+    reported = illustrated;
+    if (withoutImages > 0) {
+      warnings.push(
+        `${withoutImages} place(s) had no HD photo (${config.minImageWidth}px or larger) and were left out.`,
+      );
+    }
+  }
+
+  const places: Place[] = reported.map((place) => {
     const enriched = enrichedById.get(place.id);
     // The cleaner sees the raw OSM tags, so it happily echoes the original
     // script name back. Never let that undo a resolved English name.
