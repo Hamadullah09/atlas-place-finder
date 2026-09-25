@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { config } from '../config.js';
 import { rateLimit } from '../lib/rateLimit.js';
 import { archiveFilename, streamPlacesArchive } from '../services/archive.js';
+import { crawlTourismSource } from '../services/siteCrawl.js';
 import { getStore } from '../services/cache.js';
 import type { ImageSource, Place, SearchResult } from '../types.js';
 
@@ -174,10 +175,23 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
 
   const filename = archiveFilename(resolved);
 
+  // A single search writes its PDFs here too, so the country's official
+  // tourism site is read for this city and mined for passages, exactly as a
+  // batch run does.
+  let extraDocs;
+  if (config.crawl.tourismSources && parsed.data.detailedWriteups !== false) {
+    const official = await crawlTourismSource(
+      resolved.summarySource?.area?.countryCode,
+      resolved.city,
+    );
+    if (official.docs.length > 0) extraDocs = official.docs;
+  }
+
   const options = {
     includeImages: parsed.data.includeImages ?? true,
     includeSummary: parsed.data.includeSummary ?? true,
     detailedWriteups: parsed.data.detailedWriteups ?? true,
+    extraDocs,
   };
 
   // ---- Save on the server ------------------------------------------------

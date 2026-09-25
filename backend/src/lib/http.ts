@@ -51,18 +51,27 @@ export interface FetchOptions extends Omit<RequestInit, 'signal'> {
   retries?: number;
   /** Skip the per-host throttle (used for image downloads on CDN hosts). */
   skipThrottle?: boolean;
+  /**
+   * Abort just this request. Combined with the ambient cancel and the timeout,
+   * never replacing them -- it lets a caller racing several mirrors drop the
+   * losers as soon as one answers.
+   */
+  signal?: AbortSignal;
 }
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
 export async function fetchWithPolicy(url: string, options: FetchOptions = {}): Promise<Response> {
-  const { timeoutMs = 30_000, retries = 2, skipThrottle = false, headers, ...rest } = options;
+  const { timeoutMs = 30_000, retries = 2, skipThrottle = false, headers, signal: caller, ...rest } = options;
   const host = new URL(url).host;
 
   // Cancelling a batch has to reach the request in flight, not just the gap
   // between requests: an image download has a 45s timeout and an LLM call
   // three minutes.
-  const cancel = cancelSignal();
+  const ambient = cancelSignal();
+  const cancel = ambient && caller
+    ? AbortSignal.any([ambient, caller])
+    : (ambient ?? caller);
 
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {

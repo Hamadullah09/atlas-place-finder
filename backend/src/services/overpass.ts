@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { isCancellation } from '../lib/cancel.js';
 import { fetchWithPolicy } from '../lib/http.js';
 import { cleanText, isMostlyNonLatin } from '../lib/sanitize.js';
 import { labelFromTags, type ResolvedKeyword } from '../lib/taxonomy.js';
@@ -32,6 +33,61 @@ export class OverpassError extends Error {
  * `selectors` are produced by `resolveKeyword`, which whitelists user input —
  * nothing unescaped reaches this string.
  */
+/**
+ * Collapses selectors that differ only in value into one term per OSM key.
+ *
+ * Overpass scans the area once per statement, and "all" resolves to 40 of
+ * them -- 17 on `amenity` alone. Merging those into one regex per key asks for
+ * exactly the same elements in 14 scans instead of 40, which is both quicker
+ * for the user and lighter on a public mirror shared with everyone else.
+ *
+ * Only plain `["key"]`, `["key"="value"]` and `["key"~"^(a|b)$"]` terms are
+ * merged. A compound selector such as `["tourism"="museum"]["museum"~"history"]`
+ * means something narrower than either half, so it is passed through untouched.
+ */
+export function mergeSelectors(selectors: string[]): string[] {
+  const SIMPLE = /^\["([a-z_:]+)"(?:="([^"]+)"|~"\^\(([^)]+)\)\$")?\]$/;
+
+  const order: string[] = [];
+  const byKey = new Map<string, { presence: boolean; values: Set<string> }>();
+  const compound: string[] = [];
+
+  for (const selector of selectors) {
+    const match = SIMPLE.exec(selector);
+    if (!match) {
+      compound.push(selector);
+      continue;
+    }
+
+    const [, key, single, alternatives] = match;
+    let entry = byKey.get(key!);
+    if (!entry) {
+      entry = { presence: false, values: new Set<string>() };
+      byKey.set(key!, entry);
+      order.push(key!);
+    }
+
+    if (single !== undefined) entry.values.add(single);
+    else if (alternatives !== undefined) {
+      for (const value of alternatives.split('|')) entry.values.add(value);
+    } else {
+      // `["key"]` matches every value, so it subsumes the rest for that key.
+      entry.presence = true;
+    }
+  }
+
+  const merged = order.map((key) => {
+    const entry = byKey.get(key)!;
+    if (entry.presence || entry.values.size === 0) return `["${key}"]`;
+    const values = [...entry.values];
+    return values.length === 1
+      ? `["${key}"="${values[0]}"]`
+      : `["${key}"~"^(${values.join('|')})$"]`;
+  });
+
+  return [...merged, ...compound];
+}
+
 export function buildOverpassQuery(
   resolved: ResolvedKeyword,
   area: GeoArea,
@@ -41,7 +97,7 @@ export function buildOverpassQuery(
   const useArea = typeof area.areaId === 'number';
 
   const scope = useArea ? '(area.searchArea)' : '';
-  const statements = resolved.selectors
+  const statements = mergeSelectors(resolved.selectors)
     .map((selector) => `  nwr${selector}${scope};`)
     .join('\n');
 
@@ -52,39 +108,169 @@ export function buildOverpassQuery(
   return `${header}\n(\n${statements}\n);\nout center tags ${limit};`;
 }
 
+/**
+ * How long to wait for one mirror before also asking the next.
+ *
+ * A healthy mirror answers a city query in a few seconds. Waiting the full
+ * query timeout before trying another means one sick mirror costs the whole
+ * search: overpass.kumi.systems was measured returning 504 after 94 seconds,
+ * which the old sequential loop paid twice before moving on.
+ */
+const HEDGE_DELAY_MS = 6_000;
+
+/**
+ * The mirror that last answered, tried first next time.
+ *
+ * Mirrors differ in which extracts they carry -- one returned 0 elements for a
+ * query another answered fully -- so remembering the one that worked keeps a
+ * batch of 98 cities from re-discovering the same winner 98 times.
+ */
+let preferredEndpoint: string | undefined;
+
+/**
+ * Mirrors that just failed, and when they may be tried again.
+ *
+ * One mirror was measured answering 504 after 94 seconds. Without this, a
+ * 98-city batch pays that 94 seconds once per city for a mirror that is simply
+ * down. A sick mirror is set aside for a few minutes instead -- long enough to
+ * matter for a batch, short enough that a recovered mirror comes back on its
+ * own.
+ */
+const sickUntil = new Map<string, number>();
+const SICK_FOR_MS = 5 * 60_000;
+
+function orderedEndpoints(): string[] {
+  const all = config.overpassEndpoints;
+  const now = Date.now();
+  const healthy = all.filter((endpoint) => (sickUntil.get(endpoint) ?? 0) <= now);
+  // If every mirror is in cool-off, something is wrong with the network rather
+  // than the mirrors: try them all again rather than failing without asking.
+  const usable = healthy.length > 0 ? healthy : [...all];
+  if (!preferredEndpoint || !usable.includes(preferredEndpoint)) return usable;
+  return [preferredEndpoint, ...usable.filter((endpoint) => endpoint !== preferredEndpoint)];
+}
+
+/** Test seam — forgets which mirrors were failing. */
+export function resetOverpassHealth(): void {
+  sickUntil.clear();
+  preferredEndpoint = undefined;
+}
+
+/**
+ * Asks the mirrors for the same query, staggered, and takes the first real
+ * answer.
+ *
+ * Mirrors are asked one at a time, a further one joining every HEDGE_DELAY_MS
+ * until one answers -- so a healthy first mirror still means exactly one
+ * request, and a dead one no longer blocks the rest. The losers are aborted as
+ * soon as a winner is found.
+ *
+ * An empty answer does not win. Mirrors carry different extracts, and one was
+ * measured returning 200 with zero elements for an area query that another
+ * answered with 150 -- racing on speed alone would hand back "no places found"
+ * for a city full of them. Empty is kept aside and only used if every mirror
+ * agrees the area really is empty.
+ */
 async function runQuery(query: string): Promise<OverpassResponse> {
+  const endpoints = orderedEndpoints();
   const errors: string[] = [];
+  const controllers = endpoints.map(() => new AbortController());
 
-  for (const endpoint of config.overpassEndpoints) {
-    try {
-      const response = await fetchWithPolicy(endpoint, {
-        method: 'POST',
-        body: new URLSearchParams({ data: query }).toString(),
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/json',
-        },
-        timeoutMs: config.overpassTimeoutMs,
-        retries: 1,
-      });
+  async function ask(index: number): Promise<OverpassResponse> {
+    const response = await fetchWithPolicy(endpoints[index]!, {
+      method: 'POST',
+      body: new URLSearchParams({ data: query }).toString(),
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      timeoutMs: config.overpassTimeoutMs,
+      // No retry: the failure seen in practice is a gateway timeout minutes
+      // long, and asking the same sick mirror again just pays it twice. The
+      // other mirrors are the retry.
+      retries: 0,
+      signal: controllers[index]!.signal,
+    });
 
-      const payload = (await response.json()) as OverpassResponse;
+    const payload = (await response.json()) as OverpassResponse;
 
-      // Overpass reports query/runtime problems in `remark` with HTTP 200.
-      if (payload.remark && /error|exceeded|timed out/i.test(payload.remark)) {
-        errors.push(`${new URL(endpoint).host}: ${payload.remark}`);
-        continue;
-      }
-
-      return payload;
-    } catch (error) {
-      errors.push(`${new URL(endpoint).host}: ${error instanceof Error ? error.message : String(error)}`);
+    // Overpass reports query/runtime problems in `remark` with HTTP 200.
+    if (payload.remark && /error|exceeded|timed out/i.test(payload.remark)) {
+      throw new Error(payload.remark);
     }
+    return payload;
   }
 
-  throw new OverpassError(
-    `All Overpass endpoints failed. ${errors.join(' | ')}`,
-  );
+  return new Promise<OverpassResponse>((resolve, reject) => {
+    let next = 0;
+    let running = 0;
+    let decided = false;
+    let hedge: ReturnType<typeof setTimeout> | undefined;
+    let emptyAnswer: OverpassResponse | undefined;
+
+    const finish = (fn: () => void) => {
+      decided = true;
+      if (hedge) clearTimeout(hedge);
+      for (const controller of controllers) controller.abort();
+      fn();
+    };
+
+    const launch = (): void => {
+      const index = next;
+      next += 1;
+      running += 1;
+
+      void ask(index).then(
+        (payload) => {
+          running -= 1;
+          if (decided) return;
+
+          if ((payload.elements ?? []).length === 0) {
+            // Hold it, keep asking: another mirror may actually have the data.
+            emptyAnswer ??= payload;
+            if (next < endpoints.length) launch();
+            else if (running === 0) finish(() => resolve(emptyAnswer!));
+            return;
+          }
+
+          preferredEndpoint = endpoints[index];
+          sickUntil.delete(endpoints[index]!);
+          finish(() => resolve(payload));
+        },
+        (error: unknown) => {
+          running -= 1;
+          if (decided) return;
+
+          // A cancelled search is not a mirror failure; surface it as itself.
+          if (isCancellation(error)) {
+            finish(() => reject(error));
+            return;
+          }
+
+          errors.push(
+            `${new URL(endpoints[index]!).host}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          sickUntil.set(endpoints[index]!, Date.now() + SICK_FOR_MS);
+          if (preferredEndpoint === endpoints[index]) preferredEndpoint = undefined;
+
+          if (next < endpoints.length) launch();
+          else if (running === 0) {
+            if (emptyAnswer) finish(() => resolve(emptyAnswer!));
+            else finish(() => reject(new OverpassError(`All Overpass endpoints failed. ${errors.join(' | ')}`)));
+          }
+        },
+      );
+
+      if (next < endpoints.length) {
+        if (hedge) clearTimeout(hedge);
+        hedge = setTimeout(() => {
+          if (!decided && next < endpoints.length) launch();
+        }, HEDGE_DELAY_MS);
+      }
+    };
+
+    launch();
+  });
 }
 
 /**

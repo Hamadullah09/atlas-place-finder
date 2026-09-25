@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';import { findTourismSource, tourismSourceByName, type TourismSource } from '../data/tourismSources.js';
 import { config } from '../config.js';
 import { isMostlyNonLatin } from '../lib/sanitize.js';
 import { resolveKeyword } from '../lib/taxonomy.js';
@@ -86,9 +86,17 @@ const IMAGE_SOURCES: Record<string, { label: string; url: string }> = {
  *
  * A finished search reports what it actually used; this is the menu.
  */
-export function sourceCatalogue(): SourceLink[] {
+export function sourceCatalogue(country?: string): SourceLink[] {
   const seen = new Set<string>();
   const out: SourceLink[] = [];
+
+  // The country's own tourism site, once the form knows which country. It is
+  // listed first because it is the most specific source in the list.
+  const tourism = tourismSourceByName(country);
+  if (tourism) {
+    seen.add(tourism.url.toLowerCase());
+    out.push({ label: `${tourism.organisation} (official)`, url: tourism.url, kind: 'extra' });
+  }
 
   for (const source of DISCOVERY_SOURCES) {
     seen.add(source.url.toLowerCase());
@@ -113,6 +121,7 @@ function collectSources(
   places: Place[],
   includeImages: boolean,
   extraSources?: string | string[],
+  tourism?: TourismSource,
 ): SourceLink[] {
   const seen = new Set<string>();
   const sources: SourceLink[] = [];
@@ -123,6 +132,9 @@ function collectSources(
     seen.add(key);
     sources.push({ label, url, kind });
   }
+
+  // The country's official tourism site, read for the write-ups.
+  if (tourism) add(`${tourism.organisation} (official)`, tourism.url, 'extra');
 
   // Discovery sources — every search hits all three.
   for (const source of DISCOVERY_SOURCES) add(source.label, source.url, source.kind);
@@ -377,7 +389,12 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     };
   });
 
-  const sources = collectSources(places, includeImages, query.extraSources);
+  const sources = collectSources(
+    places,
+    includeImages,
+    query.extraSources,
+    config.crawl.tourismSources ? findTourismSource(area.countryCode, area.country) : undefined,
+  );
 
   const result: SearchResult = {
     searchId: randomUUID(),

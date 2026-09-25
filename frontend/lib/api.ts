@@ -251,9 +251,14 @@ export async function fetchCategories(signal?: AbortSignal): Promise<CategorySug
  * Fetched rather than listed in the UI so the two cannot drift: the backend
  * builds this from the same tables a finished search reports against.
  */
-export async function fetchSourceCatalogue(signal?: AbortSignal): Promise<SourceLink[]> {
+export async function fetchSourceCatalogue(
+  signal?: AbortSignal,
+  country?: string,
+): Promise<SourceLink[]> {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/sources`, { signal });
+    // With a country the list also names that country's official tourism site.
+    const query = country?.trim() ? `?country=${encodeURIComponent(country.trim())}` : '';
+    const response = await fetch(`${API_BASE_URL}/api/sources${query}`, { signal });
     if (!response.ok) return [];
     const payload = (await response.json()) as { sources?: SourceLink[] };
     return payload.sources ?? [];

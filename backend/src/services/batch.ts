@@ -9,6 +9,7 @@ import type { BatchTarget } from '../lib/csv.js';
 import { sanitizePathSegment } from '../lib/sanitize.js';
 import { streamPlacesArchive } from './archive.js';
 import { fetchExtraSources, type ExtraSourceDoc } from './extraSources.js';
+import { crawlTourismSource } from './siteCrawl.js';
 import { createProgress, type SearchProgress } from './progress.js';
 import { runSearch } from './search.js';
 
@@ -328,6 +329,24 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
         break;
       }
 
+      // The country's own tourism site, read a few pages deep for this region.
+      // It is the one source that knows the official name and the local detail
+      // Wikipedia often lacks, so it is worth a handful of requests per region.
+      let regionDocs = extraDocs;
+      if (config.crawl.tourismSources) {
+        const official = await runCancellable(active.controller.signal, () =>
+          crawlTourismSource(result.area.countryCode, row.region),
+        );
+        if (official.docs.length > 0) {
+          regionDocs = [...extraDocs, ...official.docs];
+          job.notes.push(
+            `${row.region}: read ${official.docs.length} page(s) from ${official.source?.organisation ?? 'the official tourism site'}.`,
+          );
+        } else if (official.source && official.warnings.length > 0) {
+          job.notes.push(`${row.region}: ${official.warnings[0]}`);
+        }
+      }
+
       row.status = 'exporting';
       await ensureWritableDirectory(targetDir);
 
@@ -342,7 +361,7 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
           includeImages: input.includeImages !== false,
           includeSummary: true,
           detailedWriteups: input.detailedWriteups !== false,
-          extraDocs,
+          extraDocs: regionDocs,
           signal: active.controller.signal,
           progress: row.progress,
         },

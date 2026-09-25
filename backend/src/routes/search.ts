@@ -49,8 +49,11 @@ const searchLimiter = rateLimit({
 });
 
 /** The services this install searches, so the UI need not hardcode them. */
-searchRouter.get('/sources', (_req, res) => {
-  res.json({ sources: sourceCatalogue() });
+searchRouter.get('/sources', (req, res) => {
+  // The form sends the country it has so far, so the list can name that
+  // country's official tourism site rather than only the global services.
+  const country = typeof req.query.country === 'string' ? req.query.country.slice(0, 80) : undefined;
+  res.json({ sources: sourceCatalogue(country) });
 });
 
 searchRouter.get('/categories', (_req, res) => {

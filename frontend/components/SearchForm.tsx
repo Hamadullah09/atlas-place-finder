@@ -354,7 +354,12 @@ export default function SearchForm({
           )}
         </Field>
 
-        <SourcesInUse sources={sources} typed={values.extraSources} big={hero} />
+        <SourcesInUse
+          sources={sources}
+          typed={values.extraSources}
+          country={values.country}
+          big={hero}
+        />
 
         <Field
           label="Extra source links"
@@ -443,10 +448,12 @@ export default function SearchForm({
 function SourcesInUse({
   sources,
   typed,
+  country,
   big,
 }: {
   sources?: SourceLink[];
   typed: string;
+  country?: string;
   big?: boolean;
 }) {
   const pending = useMemo(() => {
@@ -474,9 +481,16 @@ function SourcesInUse({
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetchSourceCatalogue(controller.signal).then(setCatalogue);
-    return () => controller.abort();
-  }, []);
+    // Typing a country changes the list, so wait for a pause before asking
+    // rather than firing a request per keystroke.
+    const timer = setTimeout(() => {
+      void fetchSourceCatalogue(controller.signal, country).then(setCatalogue);
+    }, country ? 400 : 0);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [country]);
 
   const used = sources ?? [];
   const listed = used.length > 0 ? used : catalogue;

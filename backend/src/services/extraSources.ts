@@ -15,6 +15,8 @@ export interface ExtraSourceDoc {
 }
 
 const MAX_DOC_CHARS = 60_000;
+/** Below this a page is a splash screen or a menu, not prose worth mining. */
+const MIN_DOC_CHARS = 200;
 const EXCERPT_WINDOW = 700;
 const MAX_EXCERPTS_PER_DOC = 3;
 
@@ -47,6 +49,17 @@ function titleOf(html: string, url: string): string {
   }
 }
 
+/**
+ * One fetched page as a source document, or undefined when it carried too
+ * little prose to ground anything. Shared with the crawler so both routes
+ * reduce pages to text the same way.
+ */
+export function htmlToDoc(html: string, url: string): ExtraSourceDoc | undefined {
+  const text = stripHtml(html).slice(0, MAX_DOC_CHARS);
+  if (text.length < MIN_DOC_CHARS) return undefined;
+  return { url, label: titleOf(html, url), text };
+}
+
 /** Fetches every reachable source once. Unreachable ones become warnings. */
 export async function fetchExtraSources(
   urls: string[],
@@ -57,13 +70,12 @@ export async function fetchExtraSources(
   for (const url of urls) {
     try {
       const response = await fetchWithPolicy(url, { timeoutMs: 30_000, retries: 1 });
-      const html = await response.text();
-      const text = stripHtml(html).slice(0, MAX_DOC_CHARS);
-      if (text.length < 200) {
+      const doc = htmlToDoc(await response.text(), url);
+      if (!doc) {
         warnings.push(`Source ${url} returned too little readable text to use.`);
         continue;
       }
-      docs.push({ url, label: titleOf(html, url), text });
+      docs.push(doc);
     } catch (error) {
       warnings.push(
         `Source ${url} could not be fetched (${error instanceof Error ? error.message : String(error)}).`,

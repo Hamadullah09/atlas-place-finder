@@ -84,8 +84,9 @@ Return ONLY a JSON object, no prose or markdown fences, with these keys:
 {"overview":"","history":"","architecture":"","context":"","highlights":["",""],"visiting":"","practical":""}
 
 Section guide — aim for the FULL length given, and never return a one-sentence article:
-- overview: 4-8 sentences. What the place is, where it is, its scale and setting, what
-  makes it notable, and who goes there.
+- overview: 6-10 sentences. What the place is, where it is, its scale and setting, what
+  makes it notable, who goes there, and anything the sources say about how it is run,
+  when it opened or what it offers. Use every relevant detail you were given.
 - history: 4-10 sentences on origins, founding, periods of change, the people and events
   connected to it, and its condition or role today.
 - architecture: 3-6 sentences on layout, style, materials, notable structures and features.
@@ -250,6 +251,113 @@ function parseJsonObject(raw: string): unknown | null {
   return null;
 }
 
+/** The street address a place carries, however it was tagged. */
+function streetAddress(place: Place): string {
+  const tags = place.tags;
+  const explicit = cleanText(tags.address ?? '', 160);
+  if (explicit) return explicit;
+
+  const street = cleanText(tags['addr:street'] ?? '', 120);
+  if (!street) return '';
+  const number = cleanText(tags['addr:housenumber'] ?? '', 20);
+  const city = cleanText(tags['addr:city'] ?? '', 80);
+  return [[street, number].filter(Boolean).join(' '), city].filter(Boolean).join(', ');
+}
+
+/** A tag value as one tidy sentence, or nothing when it is not usable. */
+function tagSentence(value: string | undefined, render: (value: string) => string, max = 160): string | undefined {
+  const clean = cleanText(value ?? '', max);
+  if (!clean) return undefined;
+  const sentence = render(clean);
+  return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
+/**
+ * What the map data already says about a place, as prose.
+ *
+ * Most places in a city have no encyclopedia article at all -- a shop, a
+ * restaurant, a small museum -- and were getting a five-word overview ("X is a
+ * supermarket.") while OSM held its operator, its former name, when it opened,
+ * what it serves and what it is built of. None of that is invented: every
+ * sentence restates one tag.
+ */
+function sentencesFromTags(place: Place): string[] {
+  const tags = place.tags;
+  const out: string[] = [];
+
+  // Mappers write this one as prose already, so it leads.
+  const described = tagSentence(tags.description, (value) => value, 400);
+  if (described) out.push(described);
+
+  // An English name is the single most useful thing to add for a reader who
+  // does not speak the local language.
+  const english = cleanText(tags['name:en'] ?? '', 160);
+  if (english && english.toLowerCase() !== place.name.toLowerCase()) {
+    out.push(`It is known in English as ${english}.`);
+  }
+
+  // Where it actually is. Nearly every place carries this and none of it was
+  // reaching the write-up.
+  const address = streetAddress(place);
+  if (address) out.push(`It is at ${address}.`);
+
+  const operator = tags.operator ?? tags.brand;
+  // "Selver AS" adds nothing after "Selver" in the name itself.
+  if (operator && !place.name.toLowerCase().includes(cleanText(operator, 120).toLowerCase())) {
+    const run = tagSentence(operator, (value) => `It is run by ${value}`, 120);
+    if (run) out.push(run);
+  }
+
+  const former = tagSentence(tags.old_name, (value) => `It was previously known as ${value}`, 120);
+  if (former) out.push(former);
+
+  if (/^\d{3,4}/.test((tags.start_date ?? '').trim())) {
+    const opened = tagSentence(tags.start_date, (value) => `It dates from ${value}`, 40);
+    if (opened) out.push(opened);
+  }
+
+  const cuisine = cleanText(tags.cuisine ?? '', 120)
+    .split(/[;,]/)
+    .map((part) => part.replace(/_/g, ' ').trim())
+    .filter(Boolean);
+  if (cuisine.length > 0) {
+    out.push(`It serves ${cuisine.slice(0, 4).join(', ')}.`);
+  }
+
+  const material = tagSentence(tags.material, (value) => `It is built of ${value.replace(/_/g, ' ')}`, 80);
+  if (material) out.push(material);
+
+  const architect = tagSentence(tags.architect, (value) => `It was designed by ${value}`, 120);
+  if (architect) out.push(architect);
+
+  if (tags.fee === 'yes') out.push('There is an admission charge.');
+  else if (tags.fee === 'no') out.push('Admission is free.');
+
+  return out;
+}
+
+/** Facilities worth listing, each straight from a tag. */
+function facilitiesFromTags(place: Place): string[] {
+  const tags = place.tags;
+  const out: string[] = [];
+  const yes = (value: string | undefined) => value === 'yes' || value === 'designated';
+
+  if (yes(tags.wheelchair)) out.push('Step-free access');
+  else if (tags.wheelchair === 'limited') out.push('Partial step-free access');
+  if (yes(tags.outdoor_seating)) out.push('Outdoor seating');
+  if (yes(tags.toilets)) out.push('Toilets');
+  if (yes(tags.changing_table)) out.push('Baby changing');
+  if (tags.internet_access === 'wlan' || yes(tags.internet_access)) out.push('Wi-Fi');
+  if (yes(tags.air_conditioning)) out.push('Air conditioning');
+
+  const cards = Object.entries(tags)
+    .filter(([key, value]) => key.startsWith('payment:') && value === 'yes')
+    .map(([key]) => key.slice('payment:'.length).replace(/_/g, ' '));
+  if (cards.length > 0) out.push(`Payment: ${cards.slice(0, 5).join(', ')}`);
+
+  return out;
+}
+
 /**
  * Deterministic fallback article, assembled from the sources with no model at
  * all. Used when the LLM is disabled or fails, so every PDF still carries a
@@ -273,11 +381,23 @@ export function fallbackWriteup(place: Place, content: PlaceContent | undefined)
     .map((part) => part.trim())
     .filter((part) => part.length > 40);
 
+  // The lead paragraph opens the overview; whatever is left of it continues
+  // into the body instead of being dropped. A 1300-character article often has
+  // no second paragraph at all, so slicing to six sentences and keeping only
+  // `paragraphs.slice(1)` threw the rest of the article away.
+  let remainder = '';
   if (paragraphs.length > 0) {
-    sentences.push(paragraphs[0]!.split(/(?<=\.)\s+/).slice(0, 6).join(' '));
+    const lead = paragraphs[0]!.split(/(?<=\.)\s+/);
+    sentences.push(lead.slice(0, 6).join(' '));
+    remainder = lead.slice(6).join(' ');
   }
 
-  const body = paragraphs.slice(1).join(' ').slice(0, 4000) || undefined;
+  // Map data first when there is no article to lead with, so a place with no
+  // encyclopedia entry still says something.
+  const fromTags = sentencesFromTags(place);
+  if (fromTags.length > 0) sentences.push(...fromTags);
+
+  const body = [remainder, ...paragraphs.slice(1)].filter(Boolean).join(' ').slice(0, 4000) || undefined;
   const voyage = content?.wikivoyageExtract
     ? content.wikivoyageExtract.split(/(?<=\.)\s+/).slice(0, 8).join(' ')
     : undefined;
@@ -285,6 +405,7 @@ export function fallbackWriteup(place: Place, content: PlaceContent | undefined)
   const highlights: string[] = [];
   for (const fact of content?.facts ?? []) highlights.push(`${fact.label}: ${fact.value}`);
   if (place.contact.openingHours) highlights.push(`Opening hours: ${place.contact.openingHours}`);
+  for (const facility of facilitiesFromTags(place)) highlights.push(facility);
   for (const extra of content?.extraExtracts ?? []) {
     highlights.push(`${extra.label}: ${extra.text.slice(0, 200)}`);
   }
@@ -300,7 +421,7 @@ export function fallbackWriteup(place: Place, content: PlaceContent | undefined)
     history: body,
     architecture: undefined,
     context: undefined,
-    highlights: highlights.slice(0, 8),
+    highlights: highlights.slice(0, 12),
     visiting: voyage,
     practical: practicalBits.join('. ') || undefined,
     llmGenerated: false,

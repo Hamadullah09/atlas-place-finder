@@ -228,6 +228,24 @@ export const config = {
     geoRadiusKm: Number(process.env.IMAGE_GEO_RADIUS_KM ?? 1),
   },
   imagesPerPlace: num(process.env.IMAGES_PER_PLACE, 10),
+  /**
+   * Places whose photos are looked up at once.
+   *
+   * Photo lookup is the slowest stage of a search: each place asks several
+   * archives in turn, and most of that time is spent waiting. The per-host
+   * throttle in lib/http.ts still paces the requests, so this governs how many
+   * places are in flight, not how hard any one archive is hit.
+   */
+  imageLookupConcurrency: num(process.env.IMAGE_LOOKUP_CONCURRENCY, 8),
+  /**
+   * Photos downloaded at once while building the archive.
+   *
+   * Measured: an export is almost entirely image bytes -- 84s of a 84s build,
+   * against 0.13s spent rendering the PDFs. The photos come from Wikimedia's
+   * CDN, which is built for parallel reads, so this is the single biggest
+   * lever on how long a folder takes to appear.
+   */
+  archiveDownloadConcurrency: num(process.env.ARCHIVE_DOWNLOAD_CONCURRENCY, 6),
   /** HD threshold, applied to the long edge so tall photos qualify too. */
   minImageWidth: num(process.env.MIN_IMAGE_WIDTH, 1600),
   /**
@@ -256,6 +274,28 @@ export const config = {
     enabled: bool(process.env.CONTENT_ENABLED, true),
     maxExtractChars: num(process.env.CONTENT_MAX_EXTRACT_CHARS, 9000),
     wikivoyage: bool(process.env.CONTENT_WIKIVOYAGE, true),
+  },
+
+  /**
+   * Shallow crawling of official tourism sites for write-up material.
+   *
+   * data/tourismSources.ts maps each country to its government tourism site;
+   * a batch run reads a few pages of the site for the region it is on and
+   * feeds the matching passages to the write-up, exactly as a pasted
+   * "additional source" already does.
+   *
+   * robots.txt is honoured for every page a link leads to, any Crawl-delay is
+   * obeyed, and the per-host throttle in lib/http.ts still applies. Text only:
+   * these sites' photographs are all rights reserved, so nothing here reaches
+   * the picture pipeline, which stays on openly licensed sources.
+   */
+  crawl: {
+    /** Attach the country's own tourism site to every batch run. */
+    tourismSources: bool(process.env.CRAWL_TOURISM_SOURCES, true),
+    /** Pages read per site per region, entry page included. */
+    maxPagesPerSite: num(process.env.CRAWL_MAX_PAGES, 5),
+    /** Wall-clock ceiling for one site's crawl, so a slow host cannot stall a job. */
+    budgetMs: num(process.env.CRAWL_BUDGET_MS, 60_000),
   },
 
   /** Extra place-discovery sources layered on top of Overpass. */

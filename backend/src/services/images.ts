@@ -32,7 +32,13 @@ let commonsGatewayUsed = false;
 
 function commonsHostOrder(extra: string[] = []): string[] {
   const hosts = [...config.commonsHosts, ...extra];
-  if (!workingCommonsHost) return hosts;
+  // Try the host that last worked first, but only a host this call would use
+  // anyway. Wikipedia is a valid last resort for imageinfo on a File: title
+  // and nothing else, so promoting it for every Commons query sent
+  // generator=geosearch and generator=search there, where a geosearch returns
+  // articles and the File namespace is all but empty -- dozens of requests per
+  // search that could not return a photo.
+  if (!workingCommonsHost || !hosts.includes(workingCommonsHost)) return hosts;
   return [workingCommonsHost, ...hosts.filter((host) => host !== workingCommonsHost)];
 }
 
@@ -69,8 +75,12 @@ async function commonsApi<T>(
         timeoutMs: 25_000,
         retries: 1,
       });
-      workingCommonsHost = host;
-      if (isCommons) commonsActionApiDownUntil = 0;
+      // Only a real Commons host is worth remembering: Wikipedia answering an
+      // imageinfo lookup does not make it a Commons mirror.
+      if (isCommons) {
+        workingCommonsHost = host;
+        commonsActionApiDownUntil = 0;
+      }
       return payload;
     } catch {
       if (isCommons) commonsTried = true;
@@ -169,14 +179,69 @@ function stripHtml(input: string | undefined): string {
   return cleanText(input.replace(/<[^>]*>/g, ' '), 200);
 }
 
+/**
+ * The widest rendition we ever serve or embed. Still well past the HD bar.
+ *
+ * Compared against the original's WIDTH, never its long edge: Commons scales
+ * by width and refuses to upscale, so asking for a 2560px-wide copy of a
+ * 2341x2871 portrait is answered with a 400.
+ */
+const SERVE_WIDTH = 2560;
+
+/**
+ * The URL of a scaled rendition, worked out from the original's address.
+ *
+ * Commons stores renditions at a fixed, derivable path:
+ *   .../commons/c/ca/Name.jpg -> .../commons/thumb/c/ca/Name.jpg/2560px-Name.jpg
+ *
+ * Every imageinfo query here asks for a 2560px thumbnail, but not every source
+ * answers with one -- the Commons gateway used when commons.wikimedia.org is
+ * blocked does not -- and those places were handing back 4032px camera
+ * originals. Deriving the rendition costs no extra request.
+ *
+ * Only raster files follow the scheme unchanged; SVG and friends render to a
+ * different extension, so they are left alone.
+ */
+export function deriveCommonsThumb(url: string, width: number): string | undefined {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.hostname !== 'upload.wikimedia.org') return undefined;
+
+  // The path alone, so a tracking query string on the original cannot end up
+  // inside the derived filename. A /thumb/ path is already a rendition.
+  const match = /^\/wikipedia\/([a-z-]+)\/([0-9a-f])\/([0-9a-f]{2})\/([^/]+)$/i.exec(parsed.pathname);
+  if (!match) return undefined;
+
+  const [, project, first, second, name] = match;
+  if (!/\.(jpe?g|png|webp)$/i.test(name!)) return undefined;
+
+  return `https://upload.wikimedia.org/wikipedia/${project}/thumb/${first}/${second}/${name}/${width}px-${name}`;
+}
+
+/**
+ * The rendition to hand out for an image of this width: a scaled copy when the
+ * original is bigger than we ever need, the original otherwise. A no-op for
+ * images hosted anywhere but Wikimedia.
+ */
+function scaledOrOriginal(url: string, width: number | undefined): string {
+  if (!width || width <= SERVE_WIDTH) return url;
+  return deriveCommonsThumb(url, SERVE_WIDTH) ?? url;
+}
+
 function toPlaceImage(info: CommonsImageInfo, source: PlaceImage['source'], title?: string): PlaceImage | null {
   if (info.mime && !ALLOWED_MIME.has(info.mime)) return null;
   if (!info.url) return null;
 
   // We ask the API for a 2560px thumbnail; use it when the original is larger
-  // so a 60 MP TIFF doesn't get pulled through the archive pipeline.
-  const scaled = info.thumburl && info.thumbwidth && info.thumbwidth >= 1024 ? info.thumburl : undefined;
-  const downloadUrl = info.width > 2560 && scaled ? scaled : info.url;
+  // so a 60 MP TIFF doesn't get pulled through the archive pipeline. When the
+  // source did not give us one, work it out from the original's address.
+  const scaled = (info.thumburl && info.thumbwidth && info.thumbwidth >= 1024 ? info.thumburl : undefined)
+    ?? (info.width > SERVE_WIDTH ? deriveCommonsThumb(info.url, SERVE_WIDTH) : undefined);
+  const downloadUrl = info.width > SERVE_WIDTH && scaled ? scaled : info.url;
 
   return {
     url: scaled ?? info.url,
@@ -349,9 +414,10 @@ async function wikipediaLeadImage(wikipediaTag: string): Promise<PlaceImage | nu
     for (const page of Object.values(payload.query?.pages ?? {})) {
       const original = page.original;
       if (!original?.source) continue;
+      const served = scaledOrOriginal(original.source, original.width);
       return {
-        url: original.source,
-        downloadUrl: original.source,
+        url: served,
+        downloadUrl: served,
         thumbUrl: (page as { thumbnail?: { source?: string } }).thumbnail?.source ?? original.source,
         width: original.width,
         height: original.height,
@@ -745,7 +811,7 @@ export async function fetchImagesForPlaces(
   // photo, when a later source had one.
   const needsMore = places.filter((place) => countTowardsQuota(result.get(place.id) ?? []) < perPlace);
 
-  await mapLimitSettled(needsMore, 4, async (place) => {
+  await mapLimitSettled(needsMore, config.imageLookupConcurrency, async (place) => {
     const collected = [...(result.get(place.id) ?? [])];
     const short = () => countTowardsQuota(collected) < perPlace;
 
@@ -786,14 +852,27 @@ export async function fetchImagesForPlaces(
     const localName = place.tags['name:local'];
     const searchNames = [...new Set([place.name, localName].filter(Boolean))] as string[];
 
-    // 4b. Photographs taken AT the coordinates. More reliable than any name
-    // match — "Bell Tower" exists in a hundred cities, but this bell tower is
-    // only at these coordinates. Needs no API key.
+    // 4b-6. The independent archives, asked together rather than in turn.
+    //
+    // These share no state and none can answer for another, so waiting for each
+    // before starting the next only added their latencies up: profiling a
+    // 12-place lookup showed 141 requests taking 155s, almost all of it spent
+    // waiting. Asked at once, a place costs about one round-trip instead of
+    // five. Each is still asked only for what is missing, and the quota is
+    // re-checked afterwards, so the paid sources below stay a last resort.
     if (short()) {
-      collected.push(
-        ...(await commonsGeoSearch(
+      const wanted = perPlace - countTowardsQuota(collected);
+
+      // The independent archives, asked together rather than in turn. Asking
+      // Commons' own queries one at a time instead was measured slower with no
+      // more photos, so they go in the same batch.
+      const lookups: Array<Promise<PlaceImage[]>> = [
+        // 4b. Photographs taken AT the coordinates. More reliable than any
+        // name match — "Bell Tower" exists in a hundred cities, but this bell
+        // tower is only at these coordinates.
+        commonsGeoSearch(
           place,
-          perPlace - collected.length,
+          wanted,
           commonsApi,
           toPlaceImage,
           (limit) => commonsFilesViaGateway(
@@ -801,32 +880,26 @@ export async function fetchImagesForPlaces(
             limit,
             'commons-geo',
           ),
-        )),
-      );
-    }
+        ),
+      ];
 
-    // 4c. Flickr, restricted to reusable licences and searched by position.
-    if (short() && config.images.flickrApiKey) {
-      collected.push(...(await flickrGeoSearch(place, options.city, perPlace - collected.length)));
-    }
+      // 4c. Flickr, restricted to reusable licences and searched by position.
+      if (config.images.flickrApiKey) lookups.push(flickrGeoSearch(place, options.city, wanted));
+      // 4d. Europeana — museums, monuments and archives, open-reuse items only.
+      if (config.images.europeanaApiKey) lookups.push(europeanaSearch(place, options.city, wanted));
 
-    // 4d. Europeana — museums, monuments and archives, open-reuse items only.
-    if (short() && config.images.europeanaApiKey) {
-      collected.push(...(await europeanaSearch(place, options.city, perPlace - collected.length)));
-    }
+      if (allowTextSearch) {
+        for (const term of searchNames) {
+          const query = `${term} ${options.city}`.trim();
+          // 5. Commons free-text search.  6. Openverse, CC-licensed, no key.
+          lookups.push(commonsSearch(query, wanted));
+          lookups.push(openverseSearch(query, wanted));
+        }
+      }
 
-    // 5. Commons free-text search.
-    for (const term of searchNames) {
-      if (!short() || !allowTextSearch) break;
-      const query = `${term} ${options.city}`.trim();
-      collected.push(...(await commonsSearch(query, perPlace - collected.length)));
-    }
-
-    // 6. Openverse — no key needed, CC-licensed.
-    for (const term of searchNames) {
-      if (!short() || !allowTextSearch) break;
-      const query = `${term} ${options.city}`.trim();
-      collected.push(...(await openverseSearch(query, perPlace - collected.length)));
+      for (const outcome of await Promise.allSettled(lookups)) {
+        if (outcome.status === 'fulfilled') collected.push(...outcome.value);
+      }
     }
 
     // 7. Unsplash last: generic stock, only if a key is configured.
