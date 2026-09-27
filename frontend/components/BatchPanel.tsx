@@ -261,7 +261,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
           Work through a whole list of cities
         </h1>
         <p className="mx-auto mt-2 max-w-xl text-[15.5px] leading-relaxed text-mist-400">
-          Upload a CSV, set three things once, and leave it running. One ZIP of
+          Upload a CSV, set three things once, and leave it running. One folder of
           illustrated PDFs is saved per city.
         </p>
       </div>
@@ -398,7 +398,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
         </label>
 
         <label className="mt-2.5 block">
-          <FieldLabel>Save path — folder on this computer for the ZIPs</FieldLabel>
+          <FieldLabel>Save path — folder on this computer for the results</FieldLabel>
           <div className="mt-1 flex gap-1.5">
             <input
               className={`${fieldClass} mt-0 flex-1`}
@@ -443,7 +443,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             onChange={(event) => setOverwrite(event.target.checked)}
             className="h-3.5 w-3.5 accent-aqua-400"
           />
-          Re-export cities that already have a ZIP
+          Re-export cities that already have a folder
         </label>
 
         <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-[14.5px] text-mist-300">

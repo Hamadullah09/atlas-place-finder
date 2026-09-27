@@ -23,7 +23,7 @@ const STEPS = [
   {
     n: '3',
     title: 'Download the write-ups',
-    body: 'A ZIP with one folder per place: an illustrated PDF plus the photographs.',
+    body: 'One folder per place: an illustrated PDF plus the photographs.',
   },
 ];
 

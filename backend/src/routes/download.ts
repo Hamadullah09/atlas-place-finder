@@ -1,11 +1,10 @@
-import { createWriteStream } from 'node:fs';
-import { mkdir, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
 import { config } from '../config.js';
 import { rateLimit } from '../lib/rateLimit.js';
-import { archiveFilename, streamPlacesArchive } from '../services/archive.js';
+import { archiveFilename, streamPlacesArchive, writePlacesFolder } from '../services/archive.js';
 import { crawlTourismSource } from '../services/siteCrawl.js';
 import { getStore } from '../services/cache.js';
 import type { ImageSource, Place, SearchResult } from '../types.js';
@@ -206,22 +205,24 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
       return;
     }
 
-    const target = path.join(savePath, filename);
-    const staging = `${target}.part`;
     try {
       await mkdir(savePath, { recursive: true });
       const info = await stat(savePath);
       if (!info.isDirectory()) throw new Error(`${savePath} is not a folder`);
 
-      await rm(staging, { force: true }).catch(() => undefined);
-      await streamPlacesArchive(createWriteStream(staging), { ...resolved, options });
-      await rm(target, { force: true }).catch(() => undefined);
-      await rename(staging, target);
+      // The operator named a folder, so the places go into it directly. Zipping
+      // them first only wrote every byte twice and left them to unpack it.
+      const written = await writePlacesFolder(savePath, { ...resolved, options });
 
-      const { size } = await stat(target);
-      res.json({ saved: true, path: target, filename, bytes: size, places: resolved.places.length });
+      res.json({
+        saved: true,
+        path: written.path,
+        filename: path.basename(written.path),
+        bytes: written.bytes,
+        files: written.files,
+        places: resolved.places.length,
+      });
     } catch (error) {
-      await rm(staging, { force: true }).catch(() => undefined);
       const message = error instanceof Error ? error.message : String(error);
       console.error('[download] save to disk failed:', message);
       res.status(/EACCES|EPERM|ENOENT|not a folder/i.test(message) ? 400 : 500)

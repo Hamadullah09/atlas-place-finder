@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { isCancellation, runCancellable } from '../lib/cancel.js';
 import { confirmConnectivity, isOffline } from '../lib/connectivity.js';
 import type { BatchTarget } from '../lib/csv.js';
 import { sanitizePathSegment } from '../lib/sanitize.js';
-import { streamPlacesArchive } from './archive.js';
+import { writePlacesFolder } from './archive.js';
 import { fetchExtraSources, type ExtraSourceDoc } from './extraSources.js';
 import { crawlTourismSource } from './siteCrawl.js';
 import { createProgress, type SearchProgress } from './progress.js';
@@ -32,7 +31,8 @@ export interface BatchRow {
   placeCount?: number;
   /** Matches dropped because another region in this run already exported them. */
   duplicatesSkipped?: number;
-  zipPath?: string;
+  /** Folder the region's places were written into. */
+  outputPath?: string;
   error?: string;
   /** Live stage while this row is in flight; cleared once it settles. */
   progress?: SearchProgress;
@@ -264,22 +264,18 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
     const countryDir = sanitizePathSegment(row.country, 'Unknown Country');
     const regionDir = sanitizePathSegment(row.region, 'Unknown Region');
     const targetDir = path.join(job.outputPath, countryDir, regionDir);
-    const zipPath = path.join(targetDir, `${attributeSegment}.zip`);
-    // Built under a temporary name so a half-written archive left by a crash
-    // or a power cut can never be mistaken for a finished one on resume.
-    const partPath = `${zipPath}.part`;
-
+    const placesDir = path.join(targetDir, attributeSegment);
+    // README.txt is written last, so a folder that has one is a region that
+    // finished. A crash or a power cut leaves a folder without it, and the
+    // next pass rebuilds that region rather than mistaking it for done.
     if (!input.overwrite) {
-      const existing = await stat(zipPath).catch(() => null);
-      if (existing?.isFile() && existing.size > 0) {
+      const finished = await stat(path.join(placesDir, 'README.txt')).catch(() => null);
+      if (finished?.isFile()) {
         row.status = 'skipped';
-        row.zipPath = zipPath;
+        row.outputPath = placesDir;
         continue;
       }
     }
-
-    // Discard any leftover partial archive for this region before rebuilding.
-    await rm(partPath, { force: true }).catch(() => undefined);
 
     try {
       row.status = 'searching';
@@ -350,8 +346,7 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
       row.status = 'exporting';
       await ensureWritableDirectory(targetDir);
 
-      const out = createWriteStream(partPath);
-      await runCancellable(active.controller.signal, () => streamPlacesArchive(out, {
+      const written = await runCancellable(active.controller.signal, () => writePlacesFolder(placesDir, {
         country: row.country,
         city: row.region,
         keyword: job.attribute,
@@ -365,20 +360,15 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
           signal: active.controller.signal,
           progress: row.progress,
         },
-      }));
-
-      // Only now is the archive complete — publish it under its real name.
-      await rm(zipPath, { force: true }).catch(() => undefined);
-      await rename(partPath, zipPath);
+      // The Country/Region folders are already in this path.
+      }, { nest: false }));
 
       job.exportedPlaceIds.push(...fresh.map((place) => place.id));
       row.status = 'done';
-      row.zipPath = zipPath;
+      row.outputPath = written.path;
       row.progress = undefined;
       await saveState(job);
     } catch (error) {
-      await rm(partPath, { force: true }).catch(() => undefined);
-
       if (active.cancelRequested || isCancellation(error)) {
         row.status = 'pending';
         job.status = 'cancelled';

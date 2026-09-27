@@ -273,7 +273,7 @@ export interface DownloadRequest {
   placeIds?: string[];
   includeImages?: boolean;
   includeSummary?: boolean;
-  /** Absolute folder. When set, the server writes the ZIP there instead of
+  /** Absolute folder. When set, the server writes the places there instead of
    *  returning it as a browser download. */
   savePath?: string;
 }
@@ -299,7 +299,7 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
  * Builds the archive.
  *
  * Two outcomes: with a save folder configured the server writes the file
- * there and we just report the path; without one the ZIP streams back and
+ * there as folders and we just report the path; without one a ZIP streams back and
  * the browser downloads it. A web page cannot choose a folder itself, which
  * is why the server-side path exists at all.
  */
@@ -317,7 +317,7 @@ export async function downloadArchive(
 
   if (!response.ok) await readError(response);
 
-  // Saved on the server: a small JSON receipt rather than a ZIP stream.
+  // Saved on the server: a small JSON receipt rather than a file stream.
   if (response.headers.get('content-type')?.includes('application/json')) {
     const saved = (await response.json()) as { path?: string; filename?: string };
     return { kind: 'saved', filename: saved.filename ?? fallbackName, path: saved.path };
@@ -364,7 +364,8 @@ export interface BatchRow {
   placeCount?: number;
   /** Matches dropped because another region already exported them. */
   duplicatesSkipped?: number;
-  zipPath?: string;
+  /** Folder the region’s places were written into. */
+  outputPath?: string;
   error?: string;
   /** Live stage while this row runs; absent once it settles. */
   progress?: {

@@ -313,7 +313,7 @@ export default function SearchForm({
 
         <Field
           label="Save downloads to"
-          hint="Pick a folder and the ZIP is written straight into it. Leave it empty to download through the browser."
+          hint="Pick a folder and the places are written into it directly, one folder each. Leave it empty to download a ZIP through the browser."
           big={hero}
         >
           <div className="flex gap-1.5">

@@ -163,7 +163,7 @@ export default function ResultsPanel({
 
       {downloadingAll && (
         <p className="mt-2 shrink-0 rounded-xl bg-slate-50 px-2.5 py-2 text-[15.5px] leading-relaxed text-mist-400">
-          Fetching source images, rendering one PDF per place, and zipping into{' '}
+          Fetching source images, rendering one PDF per place, and writing into{' '}
           <code className="rounded bg-slate-100/40 px-1 text-aqua-300">
             {result.area.country}/{result.area.city}/…
           </code>{' '}

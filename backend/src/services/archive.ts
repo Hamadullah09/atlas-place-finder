@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import type { Writable } from 'node:stream';
@@ -53,7 +54,8 @@ async function loadSharp(): Promise<SharpModule | null> {
 
 interface ConvertedImage {
   buffer: Buffer;
-  filename: string;
+  /** Position in the place's photo list; the filename is built from it later. */
+  index: number;
   caption?: string;
 }
 
@@ -105,7 +107,6 @@ async function toJpeg(input: Buffer, contentType: string): Promise<Buffer | null
 
 async function downloadPlaceImages(
   place: Place,
-  baseName: string,
   notes: string[],
 ): Promise<ConvertedImage[]> {
   const images = place.images.slice(0, config.limits.maxImagesPerPlace);
@@ -130,7 +131,7 @@ async function downloadPlaceImages(
 
     return {
       buffer: jpeg,
-      filename: `${baseName}_${String(index + 1).padStart(2, '0')}.jpeg`,
+      index,
       caption: captionFor(place, index),
     } satisfies ConvertedImage;
   });
@@ -205,28 +206,63 @@ export function archiveFilename(input: Pick<ArchiveInput, 'country' | 'city' | '
  *   README.txt
  */
 export async function streamPlacesArchive(destination: Writable, input: ArchiveInput): Promise<void> {
-  const options = input.options ?? {};
-  const includeImages = options.includeImages ?? true;
-  const embedCount = Math.max(
-    0,
-    Math.min(options.embedImagesInPdf ?? config.pdfEmbedImages, config.limits.maxImagesPerPlace),
-  );
-  const generatedAt = new Date();
-  const notes: string[] = [];
+  await buildInto({ kind: 'zip', stream: destination }, input);
+}
 
-  const places = input.places.slice(0, config.limits.maxPlacesPerArchive);
-  if (input.places.length > places.length) {
-    notes.push(
-      `Only the first ${places.length} of ${input.places.length} places were included `
-        + `(server limit MAX_PLACES_PER_ARCHIVE=${config.limits.maxPlacesPerArchive}).`,
+export interface FolderResult {
+  /** The directory the places were written into. */
+  path: string;
+  files: number;
+  bytes: number;
+}
+
+/**
+ * Writes the same tree straight into a folder, with no ZIP in between.
+ *
+ * When the operator has named a folder there is nothing for a ZIP to do: it
+ * only writes every byte a second time and leaves the reader to unpack it
+ * before they can look at anything. Writing the files where they are wanted
+ * also means the folder fills up as the run goes, rather than appearing whole
+ * at the end.
+ *
+ * Nothing is deleted to make room. Files are written over, and anything else
+ * already in the folder is left alone -- this path takes a directory the user
+ * typed, and a recursive delete there is not worth the convenience.
+ *
+ * `nest` adds the Country/City folders; a caller that already put them in the
+ * path passes false.
+ */
+export async function writePlacesFolder(
+  root: string,
+  input: ArchiveInput,
+  options: { nest?: boolean } = {},
+): Promise<FolderResult> {
+  const target = options.nest === false
+    ? root
+    : path.join(
+      root,
+      sanitizePathSegment(input.country, 'Unknown Country'),
+      sanitizePathSegment(input.city, 'Unknown City'),
     );
-  }
 
-  const countryDir = sanitizePathSegment(input.country, 'Unknown Country');
-  const cityDir = sanitizePathSegment(input.city, 'Unknown City');
-  const cityRoot = `${countryDir}/${cityDir}`;
+  const written = await buildInto({ kind: 'folder', root: target }, input);
+  return { path: target, ...written };
+}
 
+type Destination =
+  | { kind: 'zip'; stream: Writable }
+  | { kind: 'folder'; root: string };
+
+/** Somewhere to put one finished file, whether that is a ZIP entry or a path. */
+interface OutputSink {
+  add(name: string, data: Buffer | string): Promise<void>;
+  finish(): Promise<void>;
+  written: { files: number; bytes: number };
+}
+
+function zipSink(destination: Writable, notes: string[]): OutputSink {
   const archive = archiver('zip', { zlib: { level: 6 } });
+  const written = { files: 0, bytes: 0 };
 
   const closed = new Promise<void>((resolve, reject) => {
     archive.on('error', reject);
@@ -241,6 +277,77 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
   });
 
   archive.pipe(destination);
+
+  return {
+    async add(name, data) {
+      archive.append(data, { name });
+      written.files += 1;
+      written.bytes += Buffer.byteLength(data);
+    },
+    async finish() {
+      await archive.finalize();
+      await closed;
+    },
+    written,
+  };
+}
+
+function folderSink(root: string): OutputSink {
+  const written = { files: 0, bytes: 0 };
+  const ensured = new Set<string>();
+
+  return {
+    async add(name, data) {
+      const full = path.join(root, ...name.split('/'));
+      const dir = path.dirname(full);
+      if (!ensured.has(dir)) {
+        await mkdir(dir, { recursive: true });
+        ensured.add(dir);
+      }
+      await writeFile(full, data);
+      written.files += 1;
+      written.bytes += Buffer.byteLength(data);
+    },
+    async finish() {},
+    written,
+  };
+}
+
+async function buildInto(
+  destination: Destination,
+  input: ArchiveInput,
+): Promise<{ files: number; bytes: number }> {
+  const options = input.options ?? {};
+  const includeImages = options.includeImages ?? true;
+  const embedCount = Math.max(
+    0,
+    Math.min(options.embedImagesInPdf ?? config.pdfEmbedImages, config.limits.maxImagesPerPlace),
+  );
+  const generatedAt = new Date();
+  const notes: string[] = [];
+
+  let withoutPhotos = 0;
+  // What actually reached the folder, so the summary and the README describe
+  // the same set of places the reader can see.
+  const exported: Place[] = [];
+  const places = input.places.slice(0, config.limits.maxPlacesPerArchive);
+  if (input.places.length > places.length) {
+    notes.push(
+      `Only the first ${places.length} of ${input.places.length} places were included `
+        + `(server limit MAX_PLACES_PER_ARCHIVE=${config.limits.maxPlacesPerArchive}).`,
+    );
+  }
+
+  // A ZIP carries the Country/City folders inside it; a folder target already
+  // has them in its path, so entries go straight in.
+  const prefix = destination.kind === 'zip'
+    ? `${sanitizePathSegment(input.country, 'Unknown Country')}/${sanitizePathSegment(input.city, 'Unknown City')}`
+    : '';
+  const at = (...parts: string[]) => [prefix, ...parts].filter(Boolean).join('/');
+
+  const sink = destination.kind === 'zip'
+    ? zipSink(destination.stream, notes)
+    : folderSink(destination.root);
 
   // ---- Research + write-up pass ------------------------------------------
   // Runs before any file is appended so the archive streams out in one go.
@@ -304,17 +411,27 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
     });
     packaged += 1;
 
-    const safeName = dedupeFolder(sanitizePathSegment(place.name, `place-${place.osmId}`));
-    const placeDir = `${cityRoot}/${safeName}`;
-
+    // Photos first. A place whose pictures all fail to arrive is left out
+    // entirely rather than exported as a write-up with an empty folder: the
+    // search already dropped places with no HD photo on record, but a URL that
+    // 404s, times out or turns out not to be an image only shows up here.
     let converted: ConvertedImage[] = [];
     if (includeImages) {
       try {
-        converted = await downloadPlaceImages(place, safeName, notes);
+        converted = await downloadPlaceImages(place, notes);
       } catch (error) {
         notes.push(`${place.name}: image download failed (${error instanceof Error ? error.message : String(error)})`);
       }
     }
+
+    if (includeImages && config.requireImages && converted.length === 0) {
+      withoutPhotos += 1;
+      notes.push(`${place.name}: left out of the folder — no photo could be downloaded.`);
+      continue;
+    }
+
+    const safeName = dedupeFolder(sanitizePathSegment(place.name, `place-${place.osmId}`));
+    const placeDir = at(safeName);
 
     const embedded: PdfImageAsset[] = converted
       .slice(0, embedCount)
@@ -332,30 +449,41 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
         },
         embedded,
       );
-      archive.append(pdf, { name: `${placeDir}/${safeName}_details.pdf` });
+      await sink.add(`${placeDir}/${safeName}_details.pdf`, pdf);
     } catch (error) {
       notes.push(`${place.name}: PDF generation failed (${error instanceof Error ? error.message : String(error)})`);
     }
 
     for (const image of converted) {
-      archive.append(image.buffer, { name: `${placeDir}/${image.filename}` });
+      const filename = `${safeName}_${String(image.index + 1).padStart(2, '0')}.jpeg`;
+      await sink.add(`${placeDir}/${filename}`, image.buffer);
     }
 
+    // Only reachable when photos are not required; otherwise it was skipped.
     if (converted.length === 0 && includeImages) {
       notes.push(`${place.name}: no usable image was found.`);
     }
+
+    exported.push(place);
   }
 
   if (options.includeSummary !== false && input.summarySource) {
     try {
       const summary = await renderSummaryPdf(
-        { ...input.summarySource, places },
+        { ...input.summarySource, places: exported },
         generatedAt,
       );
-      archive.append(summary, { name: `${cityRoot}/_search-summary.pdf` });
+      await sink.add(at('_search-summary.pdf'), summary);
     } catch (error) {
       notes.push(`Summary PDF failed (${error instanceof Error ? error.message : String(error)})`);
     }
+  }
+
+  if (withoutPhotos > 0) {
+    notes.push(
+      `${withoutPhotos} place(s) were left out because none of their photos could be `
+        + 'downloaded. Set REQUIRE_IMAGES=false to export those as write-ups without pictures.',
+    );
   }
 
   const sharp = await loadSharp();
@@ -368,10 +496,10 @@ export async function streamPlacesArchive(destination: Writable, input: ArchiveI
     );
   }
 
-  archive.append(buildReadme(input, places.length, generatedAt, notes), { name: 'README.txt' });
+  await sink.add('README.txt', buildReadme(input, exported.length, generatedAt, notes));
 
-  await archive.finalize();
-  await closed;
+  await sink.finish();
+  return sink.written;
 }
 
 function buildReadme(
