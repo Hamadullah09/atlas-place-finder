@@ -232,11 +232,15 @@ export const config = {
    * Places whose photos are looked up at once.
    *
    * Photo lookup is the slowest stage of a search: each place asks several
-   * archives in turn, and most of that time is spent waiting. The per-host
-   * throttle in lib/http.ts still paces the requests, so this governs how many
-   * places are in flight, not how hard any one archive is hit.
+   * archives at once, and nearly all of that time is spent waiting. The
+   * per-host throttle in lib/http.ts still paces the requests, so this governs
+   * how many places are in flight, not how hard any one archive is hit.
+   *
+   * Twelve places took about 67s at 8 and about 55s at 16, so the waiting is
+   * worth overlapping; 12 is the middle of that rather than the most this
+   * network happened to tolerate.
    */
-  imageLookupConcurrency: num(process.env.IMAGE_LOOKUP_CONCURRENCY, 8),
+  imageLookupConcurrency: num(process.env.IMAGE_LOOKUP_CONCURRENCY, 12),
   /**
    * Photos downloaded at once while building the archive.
    *
@@ -246,6 +250,20 @@ export const config = {
    * lever on how long a folder takes to appear.
    */
   archiveDownloadConcurrency: num(process.env.ARCHIVE_DOWNLOAD_CONCURRENCY, 6),
+  /**
+   * Places prepared at once while writing the output.
+   *
+   * Each place's photos are fetched and its PDF rendered independently, but the
+   * files are still written in order. Without this a place waited for the one
+   * before it, so the link never carried more than one place's photos at a
+   * time. Measured on a fixed set of 4 places and 16.2MB of photos: 48.9s at
+   * one place in flight, 32.3s at two, 16.3s at four.
+   *
+   * Raising it costs memory, because a place in flight holds its photos in
+   * hand -- four places of ten photos is roughly 100MB -- which is why it is a
+   * small number rather than "all of them".
+   */
+  archivePlaceConcurrency: num(process.env.ARCHIVE_PLACE_CONCURRENCY, 4),
   /** HD threshold, applied to the long edge so tall photos qualify too. */
   minImageWidth: num(process.env.MIN_IMAGE_WIDTH, 1600),
   /**

@@ -402,19 +402,20 @@ async function buildInto(
 
   let packaged = 0;
 
-  for (const place of places) {
-    options.signal?.throwIfAborted();
-    setStage(options.progress, 'packaging', {
-      done: packaged,
-      total: places.length,
-      message: `Building ${place.name}`,
-    });
-    packaged += 1;
+  /** One place's files, built off to the side and written when its turn comes. */
+  interface PreparedPlace {
+    place: Place;
+    converted: ConvertedImage[];
+    pdf?: Buffer;
+    pdfError?: string;
+  }
 
-    // Photos first. A place whose pictures all fail to arrive is left out
-    // entirely rather than exported as a write-up with an empty folder: the
-    // search already dropped places with no HD photo on record, but a URL that
-    // 404s, times out or turns out not to be an image only shows up here.
+  // Fetch the photos and render the PDF for a place without touching the sink,
+  // so several places can be in flight while the files are still written in
+  // the order the caller gave them.
+  const prepare = async (place: Place): Promise<PreparedPlace> => {
+    options.signal?.throwIfAborted();
+
     let converted: ConvertedImage[] = [];
     if (includeImages) {
       try {
@@ -424,14 +425,10 @@ async function buildInto(
       }
     }
 
+    // A place with no photo is dropped, so do not spend a PDF render on it.
     if (includeImages && config.requireImages && converted.length === 0) {
-      withoutPhotos += 1;
-      notes.push(`${place.name}: left out of the folder — no photo could be downloaded.`);
-      continue;
+      return { place, converted };
     }
-
-    const safeName = dedupeFolder(sanitizePathSegment(place.name, `place-${place.osmId}`));
-    const placeDir = at(safeName);
 
     const embedded: PdfImageAsset[] = converted
       .slice(0, embedCount)
@@ -449,10 +446,48 @@ async function buildInto(
         },
         embedded,
       );
-      await sink.add(`${placeDir}/${safeName}_details.pdf`, pdf);
+      return { place, converted, pdf };
     } catch (error) {
-      notes.push(`${place.name}: PDF generation failed (${error instanceof Error ? error.message : String(error)})`);
+      return {
+        place,
+        converted,
+        pdfError: error instanceof Error ? error.message : String(error),
+      };
     }
+  };
+
+  const lanes = Math.max(1, Math.min(config.archivePlaceConcurrency, places.length || 1));
+  const inFlight: Array<Promise<PreparedPlace>> = [];
+  let started = 0;
+  const startNext = () => {
+    if (started < places.length) inFlight.push(prepare(places[started++]!));
+  };
+  for (let lane = 0; lane < lanes; lane += 1) startNext();
+
+  while (inFlight.length > 0) {
+    options.signal?.throwIfAborted();
+
+    const { place, converted, pdf, pdfError } = await inFlight.shift()!;
+    startNext(); // keep the window full while this one is written
+
+    setStage(options.progress, 'packaging', {
+      done: packaged,
+      total: places.length,
+      message: `Building ${place.name}`,
+    });
+    packaged += 1;
+
+    if (includeImages && config.requireImages && converted.length === 0) {
+      withoutPhotos += 1;
+      notes.push(`${place.name}: left out of the folder — no photo could be downloaded.`);
+      continue;
+    }
+
+    const safeName = dedupeFolder(sanitizePathSegment(place.name, `place-${place.osmId}`));
+    const placeDir = at(safeName);
+
+    if (pdf) await sink.add(`${placeDir}/${safeName}_details.pdf`, pdf);
+    else if (pdfError) notes.push(`${place.name}: PDF generation failed (${pdfError})`);
 
     for (const image of converted) {
       const filename = `${safeName}_${String(image.index + 1).padStart(2, '0')}.jpeg`;
