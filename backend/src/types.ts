@@ -28,7 +28,9 @@ export type ImageSource =
   | 'openverse'
   | 'unsplash'
   | 'google'
-  | 'brave';
+  | 'brave'
+  /** The country's official tourism site: all rights reserved, credited to it. */
+  | 'tourism';
 
 /** A labelled fact lifted from a Wikidata statement. */
 export interface WikidataFact {

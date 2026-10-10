@@ -21,7 +21,7 @@ const imageSchema = z.object({
   // subset previously rejected most real results on this code path.
   source: z.enum([
     'wikidata', 'wikipedia', 'commons', 'commons-category', 'commons-geo',
-    'wikipedia-article', 'flickr', 'europeana', 'openverse', 'unsplash', 'google', 'brave',
+    'wikipedia-article', 'flickr', 'europeana', 'openverse', 'unsplash', 'google', 'brave', 'tourism',
   ] as const satisfies readonly ImageSource[]),
   title: z.string().max(200).optional(),
   credit: z.string().max(300).optional(),

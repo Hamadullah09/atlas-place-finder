@@ -211,7 +211,8 @@ export async function commonsGeoSearch<TInfo>(
     ggsnamespace: 6, // File:
     prop: 'imageinfo',
     iiprop: 'url|size|mime|extmetadata',
-    iiurlwidth: 2560,
+    // 4K Ultra HD, and Wikimedia’s largest standard thumbnail size.
+    iiurlwidth: 3840,
     origin: '*',
   });
 

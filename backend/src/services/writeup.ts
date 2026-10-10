@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { config } from '../config.js';
-import { mapLimitSettled } from '../lib/concurrency.js';
+import { createLimiter } from '../lib/concurrency.js';
 import { stripUnsupportedHoursClaims } from '../lib/factCheck.js';
 import { fetchJson } from '../lib/http.js';
-import { cleanCompletion } from '../lib/llmText.js';
+import { cleanCompletion, noThinkingFields, noThinkingPrompt } from '../lib/llmText.js';
 import { cleanText } from '../lib/sanitize.js';
 import type { Place, PlaceContent, PlaceWriteup } from '../types.js';
 
@@ -429,21 +429,8 @@ export function fallbackWriteup(place: Place, content: PlaceContent | undefined)
   };
 }
 
-/**
- * Reasoning models (Qwen3, DeepSeek-R1) burn the token budget thinking before
- * they answer, so a long article gets truncated mid-JSON, fails to parse and
- * falls back to dumping raw source text into the PDF. Qwen3 honours the
- * `/no_think` soft switch on any OpenAI-compatible endpoint; Ollama also
- * accepts `think: false`. Both are sent — whichever the server understands
- * wins, and an unknown field is ignored.
- */
-function isReasoningModel(model: string): boolean {
-  return /qwen3|deepseek-r1|\br1\b|reason|thinking/i.test(model);
-}
-
 async function callLlm(place: Place, content: PlaceContent | undefined): Promise<PlaceWriteup | null> {
   const sourceBlock = buildSourceBlock(place, content);
-  const reasoning = isReasoningModel(config.llm.model);
 
   const response = await fetchJson<ChatCompletionResponse>(
     `${config.llm.baseUrl}/chat/completions`,
@@ -461,13 +448,13 @@ async function callLlm(place: Place, content: PlaceContent | undefined): Promise
         // Thinking is disabled, but leave headroom: a truncated article is the
         // single most common cause of a place getting no write-up at all.
         max_tokens: config.llm.longform.maxTokens,
-        ...(reasoning
-          ? { think: false, chat_template_kwargs: { enable_thinking: false } }
-          : {}),
+        // Thinking would burn the token budget, truncate the article mid-JSON and
+        // drop the place to the fallback text.
+        ...noThinkingFields(config.llm.model),
         messages: [
           {
             role: 'system',
-            content: reasoning ? `${SYSTEM_PROMPT}\n\n/no_think` : SYSTEM_PROMPT,
+            content: noThinkingPrompt(config.llm.model, SYSTEM_PROMPT),
           },
           {
             role: 'user',
@@ -544,6 +531,67 @@ export interface WriteupOutcome {
   notes: string[];
 }
 
+/**
+ * Every write-up request shares this, whichever export or batch region it
+ * comes from. It stands in for the model server's own capacity: Ollama works
+ * through OLLAMA_NUM_PARALLEL requests at a time and queues the rest, so
+ * sending more only moves the queue from here to there -- and a request
+ * queued there already has its timeout running.
+ */
+const llmSlots = createLimiter(() => config.llm.longform.concurrency);
+
+export interface SingleWriteup {
+  writeup: PlaceWriteup;
+  /** Something the operator should hear about this place, if anything. */
+  note?: string;
+}
+
+/**
+ * The article for one place: from the model when one is configured, otherwise
+ * assembled from the sources. Never throws -- every place gets an article.
+ *
+ * Exists so the export can ask for a write-up the moment a place's photos are
+ * in hand, instead of writing every article first and only then discovering
+ * which places have no photo and will be dropped.
+ */
+export async function generateWriteupFor(
+  place: Place,
+  content: PlaceContent | undefined,
+): Promise<SingleWriteup> {
+  if (!(config.llm.enabled && config.llm.longform.enabled)) {
+    return { writeup: fallbackWriteup(place, content) };
+  }
+
+  try {
+    // One retry, for output that came back unusable. A timeout throws rather
+    // than returning null, so it is not retried: a model too slow to answer
+    // once will be too slow twice, and the slot it holds is one others need.
+    const writeup = await llmSlots(async () =>
+      (await callLlm(place, content)) ?? (await callLlm(place, content).catch(() => null)),
+    );
+
+    if (!writeup) {
+      return {
+        writeup: fallbackWriteup(place, content),
+        note:
+          `${place.name}: the model returned no usable article twice; the PDF shows source extracts instead. `
+          + 'A larger model (qwen3:8b or above) fixes this.',
+      };
+    }
+    return {
+      writeup,
+      note: writeup.redactions.length > 0
+        ? `${place.name}: removed ${writeup.redactions.length} unsupported opening-hours claim(s) from the write-up.`
+        : undefined,
+    };
+  } catch (error) {
+    return {
+      writeup: fallbackWriteup(place, content),
+      note: `${place.name}: write-up generation failed (${error instanceof Error ? error.message : String(error)}); used the sourced fallback.`,
+    };
+  }
+}
+
 export async function generateWriteups(
   places: Place[],
   contentByPlace: Map<string, PlaceContent>,
@@ -551,54 +599,18 @@ export async function generateWriteups(
   const writeups = new Map<string, PlaceWriteup>();
   const notes: string[] = [];
 
-  const useLlm = config.llm.enabled && config.llm.longform.enabled;
-  if (!useLlm) {
-    for (const place of places) {
-      writeups.set(place.id, fallbackWriteup(place, contentByPlace.get(place.id)));
-    }
-    if (!config.llm.enabled) {
-      notes.push('No LLM configured — PDF write-ups were assembled from the sources directly.');
-    }
-    return { writeups, notes };
+  if (!config.llm.enabled) {
+    notes.push('No LLM configured — PDF write-ups were assembled from the sources directly.');
   }
 
-  await mapLimitSettled(
-    places,
-    Math.max(1, config.llm.longform.concurrency),
-    async (place) => {
-      const content = contentByPlace.get(place.id);
-      try {
-        // One retry: a single truncated or malformed response should not cost
-        // the place its whole article and drop it to raw source text.
-        let writeup = await callLlm(place, content);
-        if (!writeup) writeup = await callLlm(place, content).catch(() => null);
-
-        writeups.set(place.id, writeup ?? fallbackWriteup(place, content));
-        if (!writeup) {
-          notes.push(
-            `${place.name}: the model returned no usable article twice; the PDF shows source extracts instead. `
-              + 'A larger model (qwen3:8b or above) fixes this.',
-          );
-        } else if (writeup.redactions.length > 0) {
-          notes.push(
-            `${place.name}: removed ${writeup.redactions.length} unsupported opening-hours claim(s) from the write-up.`,
-          );
-        }
-      } catch (error) {
-        writeups.set(place.id, fallbackWriteup(place, content));
-        notes.push(
-          `${place.name}: write-up generation failed (${error instanceof Error ? error.message : String(error)}); used the sourced fallback.`,
-        );
-      }
-    },
+  // The shared limiter does the pacing, so every place can be handed over at once.
+  const results = await Promise.all(
+    places.map((place) => generateWriteupFor(place, contentByPlace.get(place.id))),
   );
-
-  // Anything the concurrency helper dropped still needs an article.
-  for (const place of places) {
-    if (!writeups.has(place.id)) {
-      writeups.set(place.id, fallbackWriteup(place, contentByPlace.get(place.id)));
-    }
-  }
+  results.forEach(({ writeup, note }, index) => {
+    writeups.set(places[index]!.id, writeup);
+    if (note) notes.push(note);
+  });
 
   return { writeups, notes };
 }

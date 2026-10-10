@@ -133,8 +133,12 @@ function collectSources(
     sources.push({ label, url, kind });
   }
 
-  // The country's official tourism site, read for the write-ups.
-  if (tourism) add(`${tourism.organisation} (official)`, tourism.url, 'extra');
+  // The country's official tourism site, read for the write-ups and, when the
+  // open sources fell short, for photos. Those are the site's own, so say so.
+  if (tourism) {
+    const photos = includeImages && places.some((place) => place.images.some((image) => image.source === 'tourism'));
+    add(`${tourism.organisation} (official${photos ? '; its photos are all rights reserved' : ''})`, tourism.url, 'extra');
+  }
 
   // Discovery sources — every search hits all three.
   for (const source of DISCOVERY_SOURCES) add(source.label, source.url, source.kind);
@@ -331,6 +335,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
       imagesByPlace = await fetchImagesForPlaces(kept, {
         city: area.city,
         country: area.country,
+        countryCode: area.countryCode,
         perPlace: config.imagesPerPlace,
       });
     } catch (error) {

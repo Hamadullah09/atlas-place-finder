@@ -71,7 +71,23 @@ function list(value: string | undefined, fallback: string[]): string[] {
   return parts.length > 0 ? parts : fallback;
 }
 
-const SAFE_DEFAULT_USER_AGENT = 'PlaceFinder/1.0 (self-hosted; set HTTP_USER_AGENT to your contact URL)';
+/**
+ * Wikimedia's User-Agent policy asks for "<client>/<version> (<contact>)", the
+ * contact being a website, an email address or a wiki user. Its rate limits
+ * then give a client with a compliant User-Agent 200 requests a minute, and
+ * one identified by nothing but its IP address 10. The old default carried no
+ * contact at all: a 6-place photo lookup took 136s, nearly all of it waiting
+ * out 429s, against 24s with a compliant one.
+ *   https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy
+ *   https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits
+ */
+export const SAFE_DEFAULT_USER_AGENT =
+  `AtlasPlaceFinder/1.0 (https://github.com/Hamadullah09/atlas-place-finder) node/${process.versions.node}`;
+
+/** A website, an email address or a wiki user -- what the policy accepts as contact. */
+export function hasContactInfo(userAgent: string): boolean {
+  return /https?:\/\/[^\s)]+|[^\s@();]+@[^\s@();]+\.[a-z]{2,}|\bUser:\S+/i.test(userAgent);
+}
 
 /**
  * Filled in at startup by `autodetectOllama()` when the operator left the
@@ -148,6 +164,14 @@ function resolveUserAgent(): string {
     console.warn(
       '[config] HTTP_USER_AGENT contains a placeholder domain, which Nominatim rejects with 403. '
         + 'Falling back to a safe default — set it to your real contact URL.',
+    );
+    return SAFE_DEFAULT_USER_AGENT;
+  }
+
+  if (!hasContactInfo(configured)) {
+    console.warn(
+      '[config] HTTP_USER_AGENT has no contact URL or email, so Wikimedia rate-limits it as an anonymous '
+        + 'client and lookups stall on 429s. Using the default instead — add your URL or email to it.',
     );
     return SAFE_DEFAULT_USER_AGENT;
   }
@@ -242,6 +266,27 @@ export const config = {
    */
   imageLookupConcurrency: num(process.env.IMAGE_LOOKUP_CONCURRENCY, 12),
   /**
+   * Wikimedia's robot policy, which governs most of what this app fetches:
+   * https://wikitech.wikimedia.org/wiki/Robot_policy
+   *
+   * Unauthenticated clients may run 1 Action API request at a time, 3 REST
+   * requests, and 2 media downloads totalling no more than 25 Mbps, with every
+   * API kept under 5 requests a second. The app used to run up to 24 image
+   * downloads and a dozen API lookups at once, and the 429s that drew cost each
+   * place about 16 seconds and, often, its photos. Clients that keep exceeding
+   * the limits "may be blocked".
+   *
+   * These cap the traffic to Wikimedia only; how many places are worked on at
+   * once is set separately, by the concurrency settings above.
+   */
+  wikimedia: {
+    mediaConcurrency: num(process.env.WIKIMEDIA_MEDIA_CONCURRENCY, 2),
+    mediaMbps: num(process.env.WIKIMEDIA_MEDIA_MBPS, 25),
+    actionConcurrency: num(process.env.WIKIMEDIA_API_CONCURRENCY, 1),
+    restConcurrency: num(process.env.WIKIMEDIA_REST_CONCURRENCY, 3),
+    requestsPerSecond: num(process.env.WIKIMEDIA_REQUESTS_PER_SECOND, 5),
+  },
+  /**
    * Photos downloaded at once while building the archive.
    *
    * Measured: an export is almost entirely image bytes -- 84s of a 84s build,
@@ -303,9 +348,12 @@ export const config = {
    * "additional source" already does.
    *
    * robots.txt is honoured for every page a link leads to, any Crawl-delay is
-   * obeyed, and the per-host throttle in lib/http.ts still applies. Text only:
-   * these sites' photographs are all rights reserved, so nothing here reaches
-   * the picture pipeline, which stays on openly licensed sources.
+   * obeyed, and the per-host throttle in lib/http.ts still applies.
+   *
+   * The same sites also supply photographs, for places the openly licensed
+   * sources left short (services/tourismImages.ts). Those photographs are
+   * all rights reserved: each is credited to the site, with its page, and
+   * every export that includes one says so in its README.
    */
   crawl: {
     /** Attach the country's own tourism site to every batch run. */
@@ -314,6 +362,16 @@ export const config = {
     maxPagesPerSite: num(process.env.CRAWL_MAX_PAGES, 5),
     /** Wall-clock ceiling for one site's crawl, so a slow host cannot stall a job. */
     budgetMs: num(process.env.CRAWL_BUDGET_MS, 60_000),
+    /**
+     * Also take photographs from the official tourism site, for places the
+     * open sources left short. Those photos are the site's own -- all rights
+     * reserved -- and are credited to it and marked so in every export.
+     */
+    tourismImages: bool(process.env.CRAWL_TOURISM_IMAGES, true),
+    /** Pages read on the site per place when looking for its photos, entry page included. */
+    tourismImagePages: num(process.env.CRAWL_TOURISM_IMAGE_PAGES, 3),
+    /** Wall-clock ceiling for one place's photo crawl. */
+    tourismImageBudgetMs: num(process.env.CRAWL_TOURISM_IMAGE_BUDGET_MS, 20_000),
   },
 
   /** Extra place-discovery sources layered on top of Overpass. */

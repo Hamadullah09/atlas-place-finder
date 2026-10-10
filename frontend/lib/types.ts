@@ -3,7 +3,7 @@ export type OsmType = 'node' | 'way' | 'relation';
 export type ImageSource =
   | 'wikidata' | 'wikipedia' | 'commons' | 'commons-category' | 'commons-geo'
   | 'wikipedia-article' | 'flickr' | 'europeana' | 'openverse' | 'unsplash'
-  | 'google' | 'brave';
+  | 'google' | 'brave' | 'tourism';
 
 export interface PlaceImage {
   url: string;

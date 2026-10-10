@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { mapLimitSettled, chunk } from '../lib/concurrency.js';
-import { fetchJson, qs } from '../lib/http.js';
+import { fetchJson, HttpError, qs } from '../lib/http.js';
+import { tourismImagesForPlace } from './tourismImages.js';
 import { cleanText } from '../lib/sanitize.js';
 import { commonsGeoSearch, europeanaSearch, braveImageSearch, flickrGeoSearch } from './imageSources.js';
 import type { PlaceImage, RawPlace } from '../types.js';
@@ -68,6 +69,8 @@ async function commonsApi<T>(
     .filter((host) => !commonsBlocked || !config.commonsHosts.includes(host));
 
   let commonsTried = false;
+  const commonsInPlay = hosts.filter((host) => config.commonsHosts.includes(host)).length;
+  let commonsUnreachable = 0;
   for (const host of hosts) {
     const isCommons = config.commonsHosts.includes(host);
     try {
@@ -82,8 +85,19 @@ async function commonsApi<T>(
         commonsActionApiDownUntil = 0;
       }
       return payload;
-    } catch {
-      if (isCommons) commonsTried = true;
+    } catch (error) {
+      if (isCommons) {
+        commonsTried = true;
+        // A connection that never got an answer means the host is blocked.
+        // Remember it now: when Wikipedia then answered the imageinfo lookup,
+        // the failure used to be forgotten, and every later lookup spent its
+        // turn in the one-at-a-time API queue on the blocked host first --
+        // 34 times, about 19 seconds, in a 12-place search.
+        if (!(error instanceof HttpError)) commonsUnreachable += 1;
+        if (commonsUnreachable > 0 && commonsUnreachable === commonsInPlay) {
+          commonsActionApiDownUntil = Date.now() + COMMONS_RETRY_AFTER_MS;
+        }
+      }
       // Try the next host.
     }
   }
@@ -180,21 +194,39 @@ function stripHtml(input: string | undefined): string {
 }
 
 /**
- * The widest rendition we ever serve or embed. Still well past the HD bar.
+ * The only thumbnail widths Wikimedia serves to a direct request. Anything else
+ * is answered with HTTP 400 -- "Use thumbnail sizes listed on
+ * https://w.wiki/GHai" (mediawiki.org/wiki/Common_thumbnail_sizes). Requests
+ * through the imageinfo API are rounded up to one of these, but a URL built by
+ * hand is not: a 2560px rendition and a 640px preview were both being refused,
+ * which cost places photos they really had.
+ */
+export const WIKIMEDIA_THUMB_WIDTHS = [20, 40, 60, 120, 250, 330, 500, 960, 1280, 1920, 3840] as const;
+
+/** The smallest standard width at least as wide as asked for, capped at the largest. */
+export function standardThumbWidth(wanted: number): number {
+  return WIKIMEDIA_THUMB_WIDTHS.find((width) => width >= wanted) ?? 3840;
+}
+
+/**
+ * The widest rendition we serve or embed: 3840px, which is 4K Ultra HD and
+ * also Wikimedia's largest standard thumbnail size.
  *
  * Compared against the original's WIDTH, never its long edge: Commons scales
- * by width and refuses to upscale, so asking for a 2560px-wide copy of a
- * 2341x2871 portrait is answered with a 400.
+ * by width and refuses to upscale, so a narrower original is served as it is.
  */
-const SERVE_WIDTH = 2560;
+const SERVE_WIDTH = 3840;
+
+/** Preview shown in the interface; 960 is standard, the 640 used before is not. */
+const PREVIEW_WIDTH = 960;
 
 /**
  * The URL of a scaled rendition, worked out from the original's address.
  *
  * Commons stores renditions at a fixed, derivable path:
- *   .../commons/c/ca/Name.jpg -> .../commons/thumb/c/ca/Name.jpg/2560px-Name.jpg
+ *   .../commons/c/ca/Name.jpg -> .../commons/thumb/c/ca/Name.jpg/3840px-Name.jpg
  *
- * Every imageinfo query here asks for a 2560px thumbnail, but not every source
+ * Every imageinfo query here asks for a 3840px thumbnail, but not every source
  * answers with one -- the Commons gateway used when commons.wikimedia.org is
  * blocked does not -- and those places were handing back 4032px camera
  * originals. Deriving the rendition costs no extra request.
@@ -219,7 +251,8 @@ export function deriveCommonsThumb(url: string, width: number): string | undefin
   const [, project, first, second, name] = match;
   if (!/\.(jpe?g|png|webp)$/i.test(name!)) return undefined;
 
-  return `https://upload.wikimedia.org/wikipedia/${project}/thumb/${first}/${second}/${name}/${width}px-${name}`;
+  const standard = standardThumbWidth(width);
+  return `https://upload.wikimedia.org/wikipedia/${project}/thumb/${first}/${second}/${name}/${standard}px-${name}`;
 }
 
 /**
@@ -236,7 +269,7 @@ function toPlaceImage(info: CommonsImageInfo, source: PlaceImage['source'], titl
   if (info.mime && !ALLOWED_MIME.has(info.mime)) return null;
   if (!info.url) return null;
 
-  // We ask the API for a 2560px thumbnail; use it when the original is larger
+  // We ask the API for a 3840px thumbnail; use it when the original is larger
   // so a 60 MP TIFF doesn't get pulled through the archive pipeline. When the
   // source did not give us one, work it out from the original's address.
   const scaled = (info.thumburl && info.thumbwidth && info.thumbwidth >= 1024 ? info.thumburl : undefined)
@@ -246,7 +279,8 @@ function toPlaceImage(info: CommonsImageInfo, source: PlaceImage['source'], titl
   return {
     url: scaled ?? info.url,
     downloadUrl,
-    thumbUrl: buildCommonsThumb(info, 640) ?? scaled ?? info.url,
+    // An original narrower than the preview cannot be scaled up to it.
+    thumbUrl: (info.width > PREVIEW_WIDTH ? buildCommonsThumb(info, PREVIEW_WIDTH) : undefined) ?? scaled ?? info.url,
     width: info.width,
     height: info.height,
     source,
@@ -260,7 +294,7 @@ function toPlaceImage(info: CommonsImageInfo, source: PlaceImage['source'], titl
 /** Commons thumbnail URLs are derivable, which saves an extra API round-trip. */
 function buildCommonsThumb(info: CommonsImageInfo, width: number): string | undefined {
   if (!info.thumburl) return undefined;
-  return info.thumburl.replace(/\/\d+px-/, `/${width}px-`);
+  return info.thumburl.replace(/\/\d+px-/, `/${standardThumbWidth(width)}px-`);
 }
 
 const COMMONS_GATEWAY = 'https://api.wikimedia.org/core/v1/commons/search/page';
@@ -337,7 +371,7 @@ async function commonsImageInfo(titles: string[]): Promise<Map<string, PlaceImag
         formatversion: 1,
         prop: 'imageinfo',
         iiprop: 'url|size|mime|extmetadata',
-        iiurlwidth: 2560,
+        iiurlwidth: SERVE_WIDTH,
         titles: batch.join('|'),
         origin: '*',
       },
@@ -450,7 +484,7 @@ async function commonsCategoryImages(category: string, limit: number): Promise<P
     gcmlimit: Math.min(limit * 3, 40),
     prop: 'imageinfo',
     iiprop: 'url|size|mime|extmetadata',
-    iiurlwidth: 2560,
+    iiurlwidth: SERVE_WIDTH,
     origin: '*',
   });
 
@@ -581,7 +615,7 @@ async function commonsSearch(query: string, limit: number): Promise<PlaceImage[]
     gsrlimit: Math.min(limit * 2, 12),
     prop: 'imageinfo',
     iiprop: 'url|size|mime|extmetadata',
-    iiurlwidth: 2560,
+    iiurlwidth: SERVE_WIDTH,
     origin: '*',
   });
 
@@ -704,6 +738,10 @@ function rankImages(images: PlaceImage[]): PlaceImage[] {
     'commons-category': 8, // the place's own Commons category
     'commons-geo': 7, // photographed at these coordinates
     flickr: 6, // geo-restricted search, reusable licence only
+    // Named in its alt text or filename, or the lead image of the page about
+    // the place, on the country's own tourism site. Specific, but all rights
+    // reserved -- so behind every openly licensed source that is as specific.
+    tourism: 5.5,
     'wikipedia-article': 5,
     europeana: 4,
     commons: 3, // free-text search from here down
@@ -764,6 +802,8 @@ export interface ImageLookupOptions {
   perPlace?: number;
   /** Set false to skip the (slower) Commons/Unsplash text search. */
   allowTextSearch?: boolean;
+  /** ISO country code, for the country's official tourism site. */
+  countryCode?: string;
 }
 
 /**
@@ -779,6 +819,9 @@ export async function fetchImagesForPlaces(
 ): Promise<Map<string, PlaceImage[]>> {
   const perPlace = Math.min(options.perPlace ?? config.imagesPerPlace, config.limits.maxImagesPerPlace);
   const allowTextSearch = options.allowTextSearch ?? true;
+  // The tourism site is asked place by place; past this, a search stops
+  // starting new crawls there, so a slow site cannot hold the whole search.
+  const tourismDeadline = Date.now() + config.crawl.budgetMs;
   const result = new Map<string, PlaceImage[]>();
   if (places.length === 0 || perPlace <= 0) return result;
 
@@ -902,6 +945,18 @@ export async function fetchImagesForPlaces(
       }
     }
 
+    // 6b. The country's official tourism site, for what the open sources could
+    //     not fill. Its photos are all rights reserved and are marked so.
+    if (short() && allowTextSearch && options.countryCode) {
+      collected.push(...(await tourismImagesForPlace(
+        options.countryCode,
+        // English sites file places under their English names.
+        [...new Set([...searchNames, place.tags['name:en']].filter(Boolean))] as string[],
+        perPlace - countTowardsQuota(collected),
+        { deadline: tourismDeadline, city: options.city },
+      ).catch(() => [])));
+    }
+
     // 7. Unsplash last: generic stock, only if a key is configured.
     if (short() && allowTextSearch && config.unsplashAccessKey) {
       const query = `${place.name} ${options.city} ${options.country}`.trim();
@@ -926,10 +981,12 @@ export async function fetchImagesForPlaces(
       result.delete(placeId);
       continue;
     }
-    result.set(placeId, rankImages(eligible).slice(0, perPlace));
+    // Not trimmed yet: a photo another place claims below must leave room for
+    // this place's next-best one.
+    result.set(placeId, rankImages(eligible));
   }
 
-  dedupeAcrossPlaces(places, result);
+  dedupeAcrossPlaces(places, result, perPlace);
 
   return result;
 }
@@ -954,7 +1011,7 @@ const PLACE_SPECIFIC_SOURCES = new Set<PlaceImage['source']>([
  * across the whole result set; explicitly-linked imagery is left alone, since
  * two places legitimately sharing a photo there is real (and rare).
  */
-function dedupeAcrossPlaces(places: RawPlace[], result: Map<string, PlaceImage[]>): void {
+function dedupeAcrossPlaces(places: RawPlace[], result: Map<string, PlaceImage[]>, perPlace: number): void {
   const claimed = new Set<string>();
 
   // Claim explicitly-linked images first so a text-search hit never displaces
@@ -966,19 +1023,31 @@ function dedupeAcrossPlaces(places: RawPlace[], result: Map<string, PlaceImage[]
   }
 
   // Iterate in the caller's order so earlier (higher-ranked) places win ties.
+  // Each place takes its best unclaimed photos up to the quota, and claims only
+  // those. Trimming to the quota first, as before, let an earlier place claim
+  // a later one's top photos and left it nothing, though it had more below the
+  // cut: a museum with two good photos of its own came back empty.
   for (const place of places) {
     const images = result.get(place.id);
     if (!images) continue;
 
-    const kept = images.filter((image) => {
+    const kept: PlaceImage[] = [];
+    for (const image of images) {
+      if (kept.length >= perPlace) break;
+      if (PLACE_SPECIFIC_SOURCES.has(image.source)) {
+        kept.push(image);
+        continue;
+      }
       const key = identityKey(image);
-      if (PLACE_SPECIFIC_SOURCES.has(image.source)) return true;
-      if (claimed.has(key)) return false;
+      if (claimed.has(key)) continue;
       claimed.add(key);
-      return true;
-    });
+      kept.push(image);
+    }
 
     if (kept.length > 0) result.set(place.id, kept);
     else result.delete(place.id);
   }
 }
+
+/** Internals exposed for unit tests only -- not part of the service contract. */
+export const __testing = { dedupeAcrossPlaces };

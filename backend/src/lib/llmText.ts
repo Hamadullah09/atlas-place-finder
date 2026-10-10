@@ -31,4 +31,25 @@ export function cleanCompletion(raw: string): string {
   return stripReasoning(raw).replace(/```(?:json|jsonc)?/gi, '').trim();
 }
 
+/**
+ * Reasoning models (Qwen3, DeepSeek-R1) spend most of their time and token
+ * budget thinking before they answer. Qwen3 honours the `/no_think` soft switch
+ * on any OpenAI-compatible endpoint; Ollama also accepts `think: false`, and
+ * vLLM/SGLang read `chat_template_kwargs`. All are sent -- whichever the server
+ * understands wins, and an unknown field is ignored.
+ */
+export function isReasoningModel(model: string): boolean {
+  return /qwen3|deepseek-r1|\br1\b|reason|thinking/i.test(model);
+}
+
+/** Request fields that switch thinking off, or nothing for other models. */
+export function noThinkingFields(model: string): Record<string, unknown> {
+  return isReasoningModel(model) ? { think: false, chat_template_kwargs: { enable_thinking: false } } : {};
+}
+
+/** The system prompt, with Qwen3's soft switch appended for reasoning models. */
+export function noThinkingPrompt(model: string, systemPrompt: string): string {
+  return isReasoningModel(model) ? `${systemPrompt}\n\n/no_think` : systemPrompt;
+}
+
 export const __testing = { stripReasoning, cleanCompletion };
