@@ -298,9 +298,10 @@ function filenameFromDisposition(header: string | null, fallback: string): strin
 /**
  * Builds the archive.
  *
- * Two outcomes: with a save folder configured the server writes the file
- * there as folders and we just report the path; without one a ZIP streams back and
- * the browser downloads it. A web page cannot choose a folder itself, which
+ * Two outcomes: with a save folder the server writes the places there as
+ * plain folders and we just report the path; without one -- only when the app
+ * is opened from another computer, where no folder can be picked -- a ZIP
+ * streams back and the browser downloads it. A web page cannot choose a folder itself, which
  * is why the server-side path exists at all.
  */
 export async function downloadArchive(

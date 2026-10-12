@@ -115,7 +115,7 @@ if ($attached) { [Native.W]::AttachThreadInput($fgThread, $myThread, $false) | O
 [System.Windows.Forms.Application]::DoEvents()
 
 $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-$dlg.Description = 'Choose where SMA Place Finder saves the batch ZIP files'
+$dlg.Description = 'Choose the folder where SMA Place Finder saves the places'
 $dlg.ShowNewFolderButton = $true
 if ($dlg.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
   Write-Output $dlg.SelectedPath

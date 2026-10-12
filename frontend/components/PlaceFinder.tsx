@@ -142,13 +142,20 @@ export default function PlaceFinder() {
       else setDownloadingAll(true);
 
       try {
-        // A configured save folder means the server writes the file for us,
-        // so the message has to say where it went rather than "downloaded".
+        // The folder is required before a search can start, and the places
+        // go into it as plain folders -- never a ZIP. It can only be missing
+        // here if it was cleared after searching.
+        const savePath = formValues.downloadPath.trim();
+        if (!savePath) {
+          setToast({ tone: 'error', message: 'Choose the folder to save in first.' });
+          return;
+        }
+
         const outcome = await downloadArchive(
           {
             searchId: result.searchId,
             placeIds,
-            savePath: formValues.downloadPath.trim() || undefined,
+            savePath,
           },
           `${result.query.keyword}-${result.area.city}.zip`,
           controller.signal,

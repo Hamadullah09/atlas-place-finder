@@ -14,8 +14,8 @@ import { runSearch } from './search.js';
 
 /**
  * Sequential batch runner: one CSV upload becomes one job that works through
- * every city/province, searching and exporting a ZIP per region into the
- * user-chosen folder. Regions run strictly one at a time — Overpass, Nominatim
+ * every city/province, searching and writing each region's places as plain
+ * folders into the user-chosen folder. Regions run strictly one at a time — Overpass, Nominatim
  * and a local LLM all punish parallelism.
  */
 
@@ -68,7 +68,7 @@ export interface BatchJobInput {
   detailedWriteups?: boolean;
   /** Cap results per region; defaults to the server MAX_RESULTS. */
   limit?: number;
-  /** Re-export regions whose ZIP already exists instead of skipping them. */
+  /** Re-export regions whose folder is already finished instead of skipping them. */
   overwrite?: boolean;
   /** Fallback cap from a "Maximum search" column, for rows without one. */
   sheetMaxSearch?: number;

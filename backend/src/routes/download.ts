@@ -78,8 +78,8 @@ const downloadBodySchema = z.union([
     includeImages: z.boolean().optional(),
     includeSummary: z.boolean().optional(),
     detailedWriteups: z.boolean().optional(),
-    /** Absolute folder on the server. When set, the ZIP is written there
-     *  instead of being streamed back to the browser. */
+    /** Absolute folder on the server. When set, the places are written into
+     *  it as plain folders and nothing is zipped or streamed back. */
     savePath: z.string().trim().max(500).optional(),
   }),
   // Fallback: the client sends the payload it already has.
@@ -91,8 +91,8 @@ const downloadBodySchema = z.union([
     includeImages: z.boolean().optional(),
     includeSummary: z.boolean().optional(),
     detailedWriteups: z.boolean().optional(),
-    /** Absolute folder on the server. When set, the ZIP is written there
-     *  instead of being streamed back to the browser. */
+    /** Absolute folder on the server. When set, the places are written into
+     *  it as plain folders and nothing is zipped or streamed back. */
     savePath: z.string().trim().max(500).optional(),
   }),
 ]);
@@ -195,9 +195,9 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
 
   // ---- Save on the server ------------------------------------------------
   // The browser cannot choose a folder, so when the operator has set one we
-  // write the archive there directly and reply with the path. Staged under a
-  // .part name and renamed on success, so a failure never leaves a partial
-  // file that looks finished.
+  // write the places there directly, one folder each, and reply with the path.
+  // No ZIP is made on this path; README.txt is written last, so a folder
+  // without one is an export that did not finish.
   const savePath = parsed.data.savePath?.trim();
   if (savePath) {
     if (!path.isAbsolute(savePath)) {

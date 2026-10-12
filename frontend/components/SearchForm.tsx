@@ -117,6 +117,12 @@ export default function SearchForm({
   const missing: string[] = [];
   if (!values.city.trim()) missing.push('a city');
   if (!values.country.trim()) missing.push('a country');
+  // The results are written into this folder, so a search without one would
+  // have nowhere to go. Checked here rather than after a search of several
+  // minutes, which is when the server would otherwise refuse it.
+  const folder = values.downloadPath.trim();
+  if (!folder) missing.push('the folder to save in');
+  else if (!isAbsoluteFolder(folder)) missing.push('a full folder path, such as D:\\Places');
   const canSubmit = missing.length === 0;
 
   return (
@@ -312,15 +318,16 @@ export default function SearchForm({
         </div>
 
         <Field
-          label="Save downloads to"
-          hint="Pick a folder and the places are written into it directly, one folder each. Leave it empty to download a ZIP through the browser."
+          label="Save to folder (required)"
+          hint="The places are written into this folder directly, one folder each — never zipped."
           big={hero}
         >
           <div className="flex gap-1.5">
             <input
               type="text"
+              required
               className={hero ? heroInputClass : inputClass}
-              placeholder="Ask me each time"
+              placeholder="Choose a folder, e.g. D:\Places"
               value={values.downloadPath}
               onChange={(event) => update('downloadPath', event.target.value)}
             />
@@ -386,7 +393,7 @@ export default function SearchForm({
 
         {!canSubmit && (
           <p className={`text-center text-mist-500 ${hero ? 'text-[14.5px]' : 'text-[15.5px]'}`}>
-            Enter {missing.join(' and ')} to search.
+            Still needed: {listOf(missing)}.
           </p>
         )}
       </div>
@@ -554,6 +561,16 @@ const inputClass =
 /** Larger, roomier inputs for the first-run screen. */
 const heroInputClass =
   'w-full rounded-xl border border-slate-300 bg-ink-950/70 px-3.5 py-3 text-[17px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
+
+/** A path the server can write to as given: a drive, a network share, or a root. */
+export function isAbsoluteFolder(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(path) || /^\\\\[^\\]/.test(path) || path.startsWith('/');
+}
+
+/** "a, b and c" */
+function listOf(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
 
 function Field({
   label,
