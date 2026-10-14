@@ -455,10 +455,11 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             className="mt-0.5 h-3.5 w-3.5 accent-aqua-400"
           />
           <span>
-            Allow the same place in several regions
+            Allow the same place to be exported again
             <span className="block text-[15.5px] leading-snug text-mist-500">
-              Off by default: a province and the cities inside it return the same
-              landmarks, so each place is exported once per run.
+              Off by default: a place already in the save folder — from another
+              region, or from an earlier run — is recognised by its map id, its
+              Wikidata item, or its name and position, and is not searched again.
             </span>
           </span>
         </label>
@@ -598,7 +599,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                     title={
                       row.error
                       ?? (row.duplicatesSkipped
-                        ? `${row.duplicatesSkipped} duplicate place(s) skipped`
+                        ? `${row.duplicatesSkipped} place(s) already exported were skipped`
                         : undefined)
                     }
                   >

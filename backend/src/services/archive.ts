@@ -219,6 +219,8 @@ export interface FolderResult {
   path: string;
   files: number;
   bytes: number;
+  /** Places that really reached the folder; one with no photo is left out. */
+  exportedIds: string[];
 }
 
 /**
@@ -321,7 +323,7 @@ function folderSink(root: string): OutputSink {
 async function buildInto(
   destination: Destination,
   input: ArchiveInput,
-): Promise<{ files: number; bytes: number }> {
+): Promise<{ files: number; bytes: number; exportedIds: string[] }> {
   const options = input.options ?? {};
   const includeImages = options.includeImages ?? true;
   const embedCount = Math.max(
@@ -596,7 +598,7 @@ async function buildInto(
   await sink.add('README.txt', buildReadme(input, exported.length, generatedAt, notes));
 
   await sink.finish();
-  return sink.written;
+  return { ...sink.written, exportedIds: exported.map((place) => place.id) };
 }
 
 function buildReadme(

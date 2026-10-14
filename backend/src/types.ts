@@ -163,6 +163,8 @@ export interface SearchStats {
   llmModel?: string;
   elapsedMs: number;
   warnings: string[];
+  /** Places a batch left out because they were exported earlier. */
+  alreadyExported?: number;
 }
 
 export interface SourceLink {

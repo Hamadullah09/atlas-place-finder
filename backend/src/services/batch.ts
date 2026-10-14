@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { isCancellation, runCancellable } from '../lib/cancel.js';
@@ -9,6 +9,7 @@ import { sanitizePathSegment } from '../lib/sanitize.js';
 import { writePlacesFolder } from './archive.js';
 import { fetchExtraSources, type ExtraSourceDoc } from './extraSources.js';
 import { crawlTourismSource } from './siteCrawl.js';
+import { PlaceRegistry, type RegistryEntry } from './placeRegistry.js';
 import { createProgress, type SearchProgress } from './progress.js';
 import { runSearch } from './search.js';
 
@@ -29,7 +30,7 @@ export interface BatchRow {
   /** Per-row cap from the CSV, when the sheet supplied one. */
   limit?: number;
   placeCount?: number;
-  /** Matches dropped because another region in this run already exported them. */
+  /** Matches left out because they were already exported, in this run or an earlier one. */
   duplicatesSkipped?: number;
   /** Folder the region's places were written into. */
   outputPath?: string;
@@ -72,7 +73,10 @@ export interface BatchJobInput {
   overwrite?: boolean;
   /** Fallback cap from a "Maximum search" column, for rows without one. */
   sheetMaxSearch?: number;
-  /** Allow the same place to be exported under several regions. */
+  /**
+   * Allow a place to be exported again: under several regions, or when an
+   * earlier run into the same folder already has it.
+   */
   allowDuplicates?: boolean;
   /** Which engine runs the searches: open-source stack (default) or Google. */
   source?: 'osm' | 'google';
@@ -80,6 +84,8 @@ export interface BatchJobInput {
 
 interface ActiveJob {
   job: BatchJob;
+  /** Every place exported into this output folder, by this run or before it. */
+  registry: PlaceRegistry;
   cancelRequested: boolean;
   /** Aborted by cancelBatchJob so the current row stops mid-flight. */
   controller: AbortController;
@@ -178,19 +184,20 @@ export async function startBatchJob(input: BatchJobInput): Promise<BatchJob> {
     startedAt: new Date().toISOString(),
   };
 
-  // Pick up where an interrupted run left off: the place ids it had already
-  // written stay claimed, so resuming does not re-export them.
+  // Everything already exported into this folder -- by an interrupted run of
+  // this job, or by earlier runs with other search terms -- is skipped.
+  const registry = await loadRegistry(input.outputPath);
   const previous = await loadState(input.outputPath);
-  if (previous && previous.attribute === job.attribute) {
-    job.exportedPlaceIds = previous.exportedPlaceIds;
-    if (previous.exportedPlaceIds.length > 0) {
-      job.notes.push(
-        `Resuming: ${previous.exportedPlaceIds.length} place(s) from an earlier run are already exported and will be skipped.`,
-      );
-    }
+  if (previous && previous.attribute === job.attribute) job.exportedPlaceIds = previous.exportedPlaceIds;
+  // Folders written before the registry existed carry only ids; still worth matching on.
+  for (const id of previous?.exportedPlaceIds ?? []) registry.addEntry({ id, names: [] });
+  if (registry.size > 0 && !input.allowDuplicates) {
+    job.notes.push(
+      `${registry.size} place(s) are already exported in this folder and will not be searched for again.`,
+    );
   }
 
-  const active: ActiveJob = { job, cancelRequested: false, controller: new AbortController() };
+  const active: ActiveJob = { job, registry, cancelRequested: false, controller: new AbortController() };
   jobs.set(job.id, active);
   lastInput.set(job.id, input);
   runningJobId = job.id;
@@ -292,19 +299,38 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
           includeImages: input.includeImages !== false,
           source: input.source ?? 'osm',
         },
-        { signal: active.controller.signal, progress: row.progress },
+        {
+          signal: active.controller.signal,
+          progress: row.progress,
+          // Province rows overlap the city rows beneath them, and a folder is
+          // often run again with another term. Places already exported are
+          // dropped inside the search, before their photos are looked up, so
+          // new places fill this region's limit instead.
+          exclude: input.allowDuplicates ? undefined : (place) => Boolean(active.registry.match(place)),
+        },
       ));
 
-      // Province rows overlap the city rows beneath them, so the same place is
-      // otherwise exported (and researched, and photographed) several times.
+      // The Google engine does not take the exclusion, and two results of one
+      // search can still be one place under two ids; catch both here.
+      const seenHere = new PlaceRegistry();
+      const repeats: RegistryEntry[] = [];
       const fresh = input.allowDuplicates
         ? result.places
-        : result.places.filter((place) => !job.exportedPlaceIds.includes(place.id));
-      const duplicates = result.places.length - fresh.length;
+        : result.places.filter((place) => {
+          const earlier = active.registry.match(place) ?? seenHere.match(place);
+          if (earlier) {
+            repeats.push(earlier);
+            return false;
+          }
+          seenHere.add(place);
+          return true;
+        });
+      const duplicates = (result.stats.alreadyExported ?? 0) + repeats.length;
       if (duplicates > 0) {
         row.duplicatesSkipped = duplicates;
+        const where = repeats.find((entry) => entry.where)?.where;
         job.notes.push(
-          `${row.region}: skipped ${duplicates} place(s) already exported for another region in this run.`,
+          `${row.region}: skipped ${duplicates} place(s) already exported${where ? ` (for example in ${where})` : ''}.`,
         );
       }
 
@@ -363,11 +389,20 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
       // The Country/Region folders are already in this path.
       }, { nest: false }));
 
-      job.exportedPlaceIds.push(...fresh.map((place) => place.id));
+      // Only what reached the folder: a place left out for want of a photo was
+      // not exported, and must not be skipped as if it had been.
+      const exported = new Set(written.exportedIds);
+      const where = path.relative(job.outputPath, placesDir) || '.';
+      for (const place of fresh) {
+        if (!exported.has(place.id)) continue;
+        active.registry.add(place, where);
+        job.exportedPlaceIds.push(place.id);
+      }
       row.status = 'done';
       row.outputPath = written.path;
       row.progress = undefined;
       await saveState(job);
+      await saveRegistry(job.outputPath, active.registry);
     } catch (error) {
       if (active.cancelRequested || isCancellation(error)) {
         row.status = 'pending';
@@ -419,6 +454,41 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
 }
 
 const STATE_FILE = '_batch-state.json';
+
+/**
+ * Every place exported into this folder, with enough to recognise it again
+ * under another id or name. Kept beside the exports so it travels with them,
+ * and read by every batch that writes into the same folder.
+ */
+const REGISTRY_FILE = '_batch-places.json';
+
+interface PersistedRegistry {
+  version: 1;
+  updatedAt: string;
+  places: RegistryEntry[];
+}
+
+async function loadRegistry(outputPath: string): Promise<PlaceRegistry> {
+  try {
+    const parsed = JSON.parse(await readFile(path.join(outputPath, REGISTRY_FILE), 'utf8')) as PersistedRegistry;
+    return PlaceRegistry.from(Array.isArray(parsed.places) ? parsed.places : []);
+  } catch {
+    return new PlaceRegistry();
+  }
+}
+
+/** Written to a temporary name and renamed, so a crash never leaves half a file. */
+async function saveRegistry(outputPath: string, registry: PlaceRegistry): Promise<void> {
+  const state: PersistedRegistry = { version: 1, updatedAt: new Date().toISOString(), places: registry.toJSON() };
+  const target = path.join(outputPath, REGISTRY_FILE);
+  const temporary = `${target}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(state), 'utf8');
+    await rename(temporary, target);
+  } catch {
+    // Losing the registry costs a duplicate later, never an export now.
+  }
+}
 
 interface PersistedState {
   attribute: string;
