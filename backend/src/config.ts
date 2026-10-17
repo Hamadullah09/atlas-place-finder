@@ -337,6 +337,12 @@ export const config = {
     enabled: bool(process.env.CONTENT_ENABLED, true),
     maxExtractChars: num(process.env.CONTENT_MAX_EXTRACT_CHARS, 9000),
     wikivoyage: bool(process.env.CONTENT_WIKIVOYAGE, true),
+    /**
+     * Read the country's own Wikivoyage guide and Wikipedia article (from the
+     * sources sheet, data/countryReferences.ts) and give each write-up the
+     * passages that name its place. One read per country.
+     */
+    countryPages: bool(process.env.CONTENT_COUNTRY_PAGES, true),
   },
 
   /**

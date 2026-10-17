@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { rateLimit } from '../lib/rateLimit.js';
 import { archiveFilename, streamPlacesArchive, writePlacesFolder } from '../services/archive.js';
 import { crawlTourismSource } from '../services/siteCrawl.js';
+import { countryPages } from '../services/countryPages.js';
 import { getStore } from '../services/cache.js';
 import type { ImageSource, Place, SearchResult } from '../types.js';
 
@@ -184,6 +185,12 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
       resolved.city,
     );
     if (official.docs.length > 0) extraDocs = official.docs;
+  }
+  // The country's Wikivoyage guide and Wikipedia article, mined the same way.
+  if (parsed.data.detailedWriteups !== false) {
+    const area = resolved.summarySource?.area;
+    const pages = await countryPages(area?.countryCode, area?.country ?? resolved.country);
+    if (pages.docs.length > 0) extraDocs = [...(extraDocs ?? []), ...pages.docs];
   }
 
   const options = {

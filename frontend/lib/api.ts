@@ -368,6 +368,14 @@ export interface BatchRow {
   /** Folder the region’s places were written into. */
   outputPath?: string;
   error?: string;
+  /** When this region started and finished (ISO), and how long each part took. */
+  startedAt?: string;
+  finishedAt?: string;
+  /** Finding places, checking them and looking up photos. */
+  searchMs?: number;
+  /** Writing articles, downloading photos and building the folder. */
+  exportMs?: number;
+  durationMs?: number;
   /** Live stage while this row runs; absent once it settles. */
   progress?: {
     stage: SearchStage;
