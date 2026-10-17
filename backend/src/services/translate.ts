@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { chunk } from '../lib/concurrency.js';
 import { fetchJson, qs } from '../lib/http.js';
-import { cleanCompletion } from '../lib/llmText.js';
+import { cleanCompletion, noThinkingFields, noThinkingPrompt } from '../lib/llmText.js';
 import { cleanText, isMostlyNonLatin } from '../lib/sanitize.js';
 import type { RawPlace } from '../types.js';
 
@@ -126,8 +126,15 @@ ${list}`;
       body: JSON.stringify({
         model: config.llm.model,
         temperature: 0,
+        ...noThinkingFields(config.llm.model),
         messages: [
-          { role: 'system', content: 'You translate place names into English. You reply with nothing but the numbered list.' },
+          {
+            role: 'system',
+            content: noThinkingPrompt(
+              config.llm.model,
+              'You translate place names into English. You reply with nothing but the numbered list.',
+            ),
+          },
           { role: 'user', content: prompt },
         ],
       }),

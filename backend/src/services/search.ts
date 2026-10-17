@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';import { findTourismSource, tourismSourceByName, type TourismSource } from '../data/tourismSources.js';
+import { findCountryReference, type CountryReference } from '../data/countryReferences.js';
 import { config } from '../config.js';
 import { isMostlyNonLatin } from '../lib/sanitize.js';
 import { resolveKeyword } from '../lib/taxonomy.js';
@@ -43,6 +44,14 @@ export interface RunSearchOptions {
    * runs for minutes, so a batch cancel has to be able to interrupt it.
    */
   signal?: AbortSignal;
+  /**
+   * Places to leave out because they were exported already -- by a batch,
+   * for an earlier region or run. Applied as soon as places are found, so no
+   * time goes on naming, checking or photographing them, and the places
+   * found next fill the limit instead. Searches that pass this are neither
+   * read from nor saved to the cache, since what they leave out changes.
+   */
+  exclude?: (place: RawPlace) => boolean;
 }
 
 /**
@@ -97,6 +106,11 @@ export function sourceCatalogue(country?: string): SourceLink[] {
     seen.add(tourism.url.toLowerCase());
     out.push({ label: `${tourism.organisation} (official)`, url: tourism.url, kind: 'extra' });
   }
+  for (const link of countryLinks(findCountryReference(undefined, country))) {
+    if (seen.has(link.url.toLowerCase())) continue;
+    seen.add(link.url.toLowerCase());
+    out.push(link);
+  }
 
   for (const source of DISCOVERY_SOURCES) {
     seen.add(source.url.toLowerCase());
@@ -116,12 +130,33 @@ export function sourceCatalogue(country?: string): SourceLink[] {
   return out;
 }
 
+/**
+ * The country's pages from the sources sheet. Wikivoyage and Wikipedia are
+ * read for the write-ups (services/countryPages.ts); the Commons category is
+ * a link to browse, since a whole country's photos are not photos of a place.
+ */
+function countryLinks(reference: CountryReference | undefined): SourceLink[] {
+  if (!reference || !config.content.countryPages) return [];
+  const out: SourceLink[] = [];
+  if (reference.wikivoyage) {
+    out.push({ label: `Wikivoyage — ${reference.country} guide`, url: reference.wikivoyage, kind: 'reference' });
+  }
+  if (reference.wikipedia) {
+    out.push({ label: `Wikipedia — ${reference.country}`, url: reference.wikipedia, kind: 'reference' });
+  }
+  if (reference.commons) {
+    out.push({ label: `Wikimedia Commons — ${reference.country} (to browse)`, url: reference.commons, kind: 'reference' });
+  }
+  return out;
+}
+
 /** Collect unique sources used during the search. */
 function collectSources(
   places: Place[],
   includeImages: boolean,
   extraSources?: string | string[],
   tourism?: TourismSource,
+  reference?: CountryReference,
 ): SourceLink[] {
   const seen = new Set<string>();
   const sources: SourceLink[] = [];
@@ -133,8 +168,14 @@ function collectSources(
     sources.push({ label, url, kind });
   }
 
-  // The country's official tourism site, read for the write-ups.
-  if (tourism) add(`${tourism.organisation} (official)`, tourism.url, 'extra');
+  // The country's official tourism site, read for the write-ups and, when the
+  // open sources fell short, for photos. Those are the site's own, so say so.
+  if (tourism) {
+    const photos = includeImages && places.some((place) => place.images.some((image) => image.source === 'tourism'));
+    add(`${tourism.organisation} (official${photos ? '; its photos are all rights reserved' : ''})`, tourism.url, 'extra');
+  }
+
+  for (const link of countryLinks(reference)) add(link.label, link.url, link.kind);
 
   // Discovery sources — every search hits all three.
   for (const source of DISCOVERY_SOURCES) add(source.label, source.url, source.kind);
@@ -212,7 +253,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   const cacheKey = cacheKeyFor(keyword, city, country, limit, useLlm, source)
     + (query.extraSources?.trim() ? `|${query.extraSources.trim()}` : '');
 
-  if (!options.refresh) {
+  if (!options.refresh && !options.exclude) {
     const cached = await store.get(cacheKey).catch(() => null);
     if (cached) return cached;
   }
@@ -254,9 +295,14 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   // OSM and Wikidata collapses into one richer record. Rank by informationScore
   // (not raw tag count) so a place with a Wikipedia article outranks one that
   // merely carries a lot of address tags.
-  const rawPlaces = dedupePlaces([...overpassPlaces, ...wikidataPlaces, ...nominatimPlaces]).sort(
+  const found = dedupePlaces([...overpassPlaces, ...wikidataPlaces, ...nominatimPlaces]).sort(
     (a, b) => informationScore(b) - informationScore(a),
   );
+
+  // Already exported: dropped before anything is spent on them.
+  const exclude = options.exclude;
+  const rawPlaces = exclude ? found.filter((place) => !exclude(place)) : found;
+  let alreadyExported = found.length - rawPlaces.length;
 
   const extraFound = rawPlaces.length - overpassPlaces.length;
   if (extraFound > 0) {
@@ -287,7 +333,13 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
   // transposed characters, translated-vs-transliterated pairs, added articles.
   const semantic = await semanticDedupe(exact).catch(() => ({ places: exact, merged: 0, note: undefined }));
   if (semantic.note) warnings.push(semantic.note);
-  const named = semantic.places;
+  // Checked again under the English names, which can match an earlier
+  // export that the original-script names did not.
+  const named = exclude ? semantic.places.filter((place) => !exclude(place)) : semantic.places;
+  alreadyExported += semantic.places.length - named.length;
+  if (alreadyExported > 0) {
+    warnings.push(`${alreadyExported} place(s) were already exported earlier and were skipped.`);
+  }
 
   options.signal?.throwIfAborted();
   setStage(options.progress, 'filtering', {
@@ -331,6 +383,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
       imagesByPlace = await fetchImagesForPlaces(kept, {
         city: area.city,
         country: area.country,
+        countryCode: area.countryCode,
         perPlace: config.imagesPerPlace,
       });
     } catch (error) {
@@ -394,6 +447,7 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
     includeImages,
     query.extraSources,
     config.crawl.tourismSources ? findTourismSource(area.countryCode, area.country) : undefined,
+    findCountryReference(area.countryCode, area.country),
   );
 
   const result: SearchResult = {
@@ -410,14 +464,19 @@ export async function runSearch(query: SearchQuery, options: RunSearchOptions = 
       llmModel: enrichment.llmUsed ? config.llm.model : undefined,
       elapsedMs: Date.now() - startedAt,
       warnings,
+      ...(exclude ? { alreadyExported } : {}),
     },
     sources,
     cachedAt: new Date().toISOString(),
   };
 
-  await store.save(cacheKey, result).catch((error: unknown) => {
-    console.warn('[search] failed to cache result:', error instanceof Error ? error.message : error);
-  });
+  // A result with places left out is not the answer to this query for anyone
+  // else, so it is not cached.
+  if (!exclude) {
+    await store.save(cacheKey, result).catch((error: unknown) => {
+      console.warn('[search] failed to cache result:', error instanceof Error ? error.message : error);
+    });
+  }
 
   setStage(options.progress, 'done', {
     message: `Found ${result.places.length} places`,

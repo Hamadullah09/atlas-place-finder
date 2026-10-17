@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { chunk, mapLimit } from '../lib/concurrency.js';
 import { stripUnsupportedHoursClaims } from '../lib/factCheck.js';
 import { fetchJson } from '../lib/http.js';
-import { cleanCompletion } from '../lib/llmText.js';
+import { cleanCompletion, noThinkingFields, noThinkingPrompt } from '../lib/llmText.js';
 import { cleanText, isMostlyNonLatin } from '../lib/sanitize.js';
 import type { PlaceContact, RawPlace } from '../types.js';
 
@@ -307,8 +307,11 @@ async function callLlm(payload: unknown[], context: EnrichContext): Promise<LlmP
         model: config.llm.model,
         temperature: 0.1,
         max_tokens: 2400,
+        // Thinking was left on here: on CPU it multiplied the time per batch
+        // and could use up the 2400 tokens before any JSON was written.
+        ...noThinkingFields(config.llm.model),
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'system', content: noThinkingPrompt(config.llm.model, SYSTEM_PROMPT) },
           { role: 'user', content: userPrompt },
         ],
       }),

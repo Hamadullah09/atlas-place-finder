@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { rateLimit } from '../lib/rateLimit.js';
 import { archiveFilename, streamPlacesArchive, writePlacesFolder } from '../services/archive.js';
 import { crawlTourismSource } from '../services/siteCrawl.js';
+import { countryPages } from '../services/countryPages.js';
 import { getStore } from '../services/cache.js';
 import type { ImageSource, Place, SearchResult } from '../types.js';
 
@@ -21,7 +22,7 @@ const imageSchema = z.object({
   // subset previously rejected most real results on this code path.
   source: z.enum([
     'wikidata', 'wikipedia', 'commons', 'commons-category', 'commons-geo',
-    'wikipedia-article', 'flickr', 'europeana', 'openverse', 'unsplash', 'google', 'brave',
+    'wikipedia-article', 'flickr', 'europeana', 'openverse', 'unsplash', 'google', 'brave', 'tourism',
   ] as const satisfies readonly ImageSource[]),
   title: z.string().max(200).optional(),
   credit: z.string().max(300).optional(),
@@ -78,8 +79,8 @@ const downloadBodySchema = z.union([
     includeImages: z.boolean().optional(),
     includeSummary: z.boolean().optional(),
     detailedWriteups: z.boolean().optional(),
-    /** Absolute folder on the server. When set, the ZIP is written there
-     *  instead of being streamed back to the browser. */
+    /** Absolute folder on the server. When set, the places are written into
+     *  it as plain folders and nothing is zipped or streamed back. */
     savePath: z.string().trim().max(500).optional(),
   }),
   // Fallback: the client sends the payload it already has.
@@ -91,8 +92,8 @@ const downloadBodySchema = z.union([
     includeImages: z.boolean().optional(),
     includeSummary: z.boolean().optional(),
     detailedWriteups: z.boolean().optional(),
-    /** Absolute folder on the server. When set, the ZIP is written there
-     *  instead of being streamed back to the browser. */
+    /** Absolute folder on the server. When set, the places are written into
+     *  it as plain folders and nothing is zipped or streamed back. */
     savePath: z.string().trim().max(500).optional(),
   }),
 ]);
@@ -185,6 +186,12 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
     );
     if (official.docs.length > 0) extraDocs = official.docs;
   }
+  // The country's Wikivoyage guide and Wikipedia article, mined the same way.
+  if (parsed.data.detailedWriteups !== false) {
+    const area = resolved.summarySource?.area;
+    const pages = await countryPages(area?.countryCode, area?.country ?? resolved.country);
+    if (pages.docs.length > 0) extraDocs = [...(extraDocs ?? []), ...pages.docs];
+  }
 
   const options = {
     includeImages: parsed.data.includeImages ?? true,
@@ -195,9 +202,9 @@ downloadRouter.post('/download', downloadLimiter, async (req, res, next) => {
 
   // ---- Save on the server ------------------------------------------------
   // The browser cannot choose a folder, so when the operator has set one we
-  // write the archive there directly and reply with the path. Staged under a
-  // .part name and renamed on success, so a failure never leaves a partial
-  // file that looks finished.
+  // write the places there directly, one folder each, and reply with the path.
+  // No ZIP is made on this path; README.txt is written last, so a folder
+  // without one is an export that did not finish.
   const savePath = parsed.data.savePath?.trim();
   if (savePath) {
     if (!path.isAbsolute(savePath)) {

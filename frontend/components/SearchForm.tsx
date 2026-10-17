@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { browseFolder, fetchCategories, fetchSourceCatalogue } from '@/lib/api';
 import type { SourceLink } from '@/lib/types';
 import type { CategorySuggestion, SearchQuery } from '@/lib/types';
+import { ALL_COLOUR, PRIMARY_BUTTON, pickColour } from '@/lib/palette';
 
 export interface SearchFormValues extends SearchQuery {
   limit: number;
@@ -16,7 +17,7 @@ export interface SearchFormValues extends SearchQuery {
 interface SearchFormProps {
   initialValues: SearchFormValues;
   values?: SearchFormValues;
-  /** Sources the last search actually used, listed above the extras box. */
+  /** Sources the last search actually used, listed under More options. */
   sources?: SourceLink[];
   loading: boolean;
   /**
@@ -117,31 +118,35 @@ export default function SearchForm({
   const missing: string[] = [];
   if (!values.city.trim()) missing.push('a city');
   if (!values.country.trim()) missing.push('a country');
+  // The results are written into this folder, so a search without one would
+  // have nowhere to go. Checked here rather than after a search of several
+  // minutes, which is when the server would otherwise refuse it.
+  const folder = values.downloadPath.trim();
+  if (!folder) missing.push('the folder to save in');
+  else if (!isAbsoluteFolder(folder)) missing.push('a full folder path, such as D:\\Places');
   const canSubmit = missing.length === 0;
+
+  const input = hero ? heroInputClass : inputClass;
+  const chip = hero ? 'px-4 py-2 text-[18px]' : 'px-3 py-1.5 text-[18px]';
+  const extraCount = keywordParts(values.extraSources.replace(/\n/g, ',')).length;
 
   return (
     <form
-      className="space-y-3"
+      className={hero ? 'space-y-4' : 'space-y-3 rounded-2xl border border-slate-200 border-t-4 border-t-teal-500 bg-ink-900 p-3.5'}
       onSubmit={(event) => {
         event.preventDefault();
         if (canSubmit && !loading) onSearch({ ...values, keyword });
       }}
     >
-      <div
-        className={
-          hero
-            ? 'space-y-3'
-            : 'space-y-2.5 rounded-2xl border border-slate-200 bg-ink-900/60 p-3.5'
-        }
-      >
-        {/* On the hero screen the three inputs read as one sentence across a
-            single row; in the sidebar they stack. */}
-        <div className={hero ? 'grid gap-2.5 sm:grid-cols-[1.4fr_1fr_1fr]' : 'space-y-2.5'}>
-          <Field label="What are you looking for?" big={hero}>
+      {/* What and where. On a wide hero screen the three read as one row; on a
+          phone and in the sidebar "what" gets a full row above city and country. */}
+      <div className={`grid grid-cols-2 gap-2.5 ${hero ? 'sm:grid-cols-[1.4fr_1fr_1fr]' : ''}`}>
+        <div className={hero ? 'col-span-2 sm:col-span-1' : 'col-span-2'}>
+          <Field label="What to find" big={hero}>
             <input
               ref={keywordRef}
               list={listId}
-              className={hero ? heroInputClass : inputClass}
+              className={input}
               placeholder="all"
               value={values.keyword}
               autoComplete="off"
@@ -155,263 +160,209 @@ export default function SearchForm({
               ))}
             </datalist>
           </Field>
-
-          {hero ? (
-            <>
-              <Field label="City" big>
-                <input
-                  className={heroInputClass}
-                  placeholder="Kyoto"
-                  value={values.city}
-                  autoComplete="address-level2"
-                  onChange={(event) => update('city', event.target.value)}
-                />
-              </Field>
-              <Field label="Country" big>
-                <input
-                  className={heroInputClass}
-                  placeholder="Japan"
-                  value={values.country}
-                  autoComplete="country-name"
-                  onChange={(event) => update('country', event.target.value)}
-                />
-              </Field>
-            </>
-          ) : (
-            <div className="grid grid-cols-2 gap-2.5">
-              <Field label="City">
-                <input
-                  className={inputClass}
-                  placeholder="Kyoto"
-                  value={values.city}
-                  autoComplete="address-level2"
-                  onChange={(event) => update('city', event.target.value)}
-                />
-              </Field>
-              <Field label="Country">
-                <input
-                  className={inputClass}
-                  placeholder="Japan"
-                  value={values.country}
-                  autoComplete="country-name"
-                  onChange={(event) => update('country', event.target.value)}
-                />
-              </Field>
-            </div>
-          )}
         </div>
+        <Field label="City" big={hero}>
+          <input
+            className={input}
+            placeholder="Kyoto"
+            value={values.city}
+            autoComplete="address-level2"
+            onChange={(event) => update('city', event.target.value)}
+          />
+        </Field>
+        <Field label="Country" big={hero}>
+          <input
+            className={input}
+            placeholder="Japan"
+            value={values.country}
+            autoComplete="country-name"
+            onChange={(event) => update('country', event.target.value)}
+          />
+        </Field>
+      </div>
 
-        <div className={`flex flex-wrap gap-1.5 ${hero ? 'justify-center' : ''}`}>
-          <button
-            type="button"
-            onClick={() => update('keyword', ALL_PLACES)}
-            className={`rounded-full border font-semibold transition ${
-              hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
-            } ${
-              isAll(values.keyword)
-                ? 'border-aqua-500 bg-aqua-500 text-white'
-                : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
-            }`}
-          >
-            All places
-          </button>
+      {/* Quick picks: one swipeable row on a phone, wrapped on wider screens. */}
+      <div className={`chip-row flex gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0 ${hero ? 'sm:justify-center' : ''}`}>
+        <button
+          type="button"
+          onClick={() => update('keyword', ALL_PLACES)}
+          className={`shrink-0 whitespace-nowrap rounded-full border font-semibold transition ${chip} ${
+            isAll(values.keyword) ? ALL_COLOUR.on : ALL_COLOUR.idle
+          }`}
+        >
+          All places
+        </button>
 
-          {QUICK_PICKS.map((pick) => {
-            const chosen = !isAll(values.keyword) && keywordParts(values.keyword).includes(pick);
-            return (
-              <button
-                key={pick}
-                type="button"
-                aria-pressed={chosen}
-                onClick={() => {
-                  if (chosen) {
-                    const next = keywordParts(values.keyword).filter((part) => part !== pick);
-                    update('keyword', next.length > 0 ? next.join(', ') : ALL_PLACES);
-                    return;
-                  }
-
-                  addKeyword(pick);
-                }}
-                className={`rounded-full border font-medium transition ${
-                  hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
-                } ${
-                  chosen
-                    ? 'border-aqua-500 bg-aqua-500/10 text-aqua-300'
-                    : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
-                }`}
-              >
-                {chosen ? `✓ ${pick}` : pick}
-              </button>
-            );
-          })}
-
-          {/* Anything the row does not offer. */}
-          {adding ? (
-            <span className="inline-flex items-center gap-1 overflow-hidden">
-              <input
-                ref={customRef}
-                value={custom}
-                onChange={(event) => setCustom(event.target.value)}
-                onKeyDown={(event) => {
-                  // Enter belongs to this field, not to the search.
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    addKeyword(custom, false);
-                    setCustom('');
-                    return;
-                  }
-                  if (event.key === 'Escape') {
-                    setAdding(false);
-                    setCustom('');
-                  }
-                }}
-                onBlur={() => {
-                  if (!custom.trim()) setAdding(false);
-                }}
-                placeholder="e.g. libraries"
-                aria-label="Add another kind of place"
-                className={`w-40 animate-slide-in rounded-full border border-aqua-500 bg-white px-3 text-mist-50 outline-none transition placeholder:text-mist-500 focus:ring-2 focus:ring-aqua-500/20 ${
-                  hero ? 'py-2 text-[15px]' : 'py-1.5 text-[15px]'
-                }`}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  addKeyword(custom, false);
-                  setCustom('');
-                  customRef.current?.focus();
-                }}
-                disabled={!custom.trim()}
-                className="rounded-full bg-aqua-500 px-3 py-1.5 text-[15px] font-semibold text-white transition hover:bg-aqua-600 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Add
-              </button>
-              <button
-                type="button"
-                onClick={() => { setAdding(false); setCustom(''); }}
-                aria-label="Close"
-                className="px-1 text-[16px] text-mist-500 transition hover:text-mist-200"
-              >
-                ✕
-              </button>
-            </span>
-          ) : (
+        {QUICK_PICKS.map((pick) => {
+          const chosen = !isAll(values.keyword) && keywordParts(values.keyword).includes(pick);
+          return (
             <button
+              key={pick}
               type="button"
+              aria-pressed={chosen}
               onClick={() => {
-                setAdding(true);
-                requestAnimationFrame(() => customRef.current?.focus());
+                if (chosen) {
+                  const next = keywordParts(values.keyword).filter((part) => part !== pick);
+                  update('keyword', next.length > 0 ? next.join(', ') : ALL_PLACES);
+                  return;
+                }
+                addKeyword(pick);
               }}
-              className={`rounded-full border border-dashed border-slate-400 font-semibold text-mist-400 transition hover:border-aqua-500 hover:text-aqua-300 ${
-                hero ? 'px-4 py-2 text-[15px]' : 'px-3 py-1.5 text-[15px]'
+              className={`shrink-0 whitespace-nowrap rounded-full border font-medium transition ${chip} ${
+                chosen ? pickColour(pick).on : pickColour(pick).idle
               }`}
             >
-              + Add
+              {chosen ? `✓ ${pick}` : pick}
             </button>
-          )}
-        </div>
+          );
+        })}
 
-        <Field
-          label="Save downloads to"
-          hint="Pick a folder and the places are written into it directly, one folder each. Leave it empty to download a ZIP through the browser."
-          big={hero}
-        >
-          <div className="flex gap-1.5">
+        {/* Anything the row does not offer. */}
+        {adding ? (
+          <span className="inline-flex shrink-0 items-center gap-1">
             <input
-              type="text"
-              className={hero ? heroInputClass : inputClass}
-              placeholder="Ask me each time"
-              value={values.downloadPath}
-              onChange={(event) => update('downloadPath', event.target.value)}
+              ref={customRef}
+              value={custom}
+              onChange={(event) => setCustom(event.target.value)}
+              onKeyDown={(event) => {
+                // Enter belongs to this field, not to the search.
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  addKeyword(custom, false);
+                  setCustom('');
+                  return;
+                }
+                if (event.key === 'Escape') {
+                  setAdding(false);
+                  setCustom('');
+                }
+              }}
+              onBlur={() => {
+                if (!custom.trim()) setAdding(false);
+              }}
+              placeholder="e.g. libraries"
+              aria-label="Add another kind of place"
+              className={`w-36 animate-slide-in rounded-full border border-aqua-500 bg-white px-3 text-mist-50 outline-none transition placeholder:text-mist-500 focus:ring-2 focus:ring-aqua-500/20 ${
+                hero ? 'py-2 text-[18px]' : 'py-1.5 text-[18px]'
+              }`}
             />
             <button
               type="button"
-              disabled={browsing}
-              onClick={async () => {
-                setBrowsing(true);
-                setHintVisible(true);
-                try {
-                  const folder = await browseFolder();
-                  if (folder) update('downloadPath', folder);
-                } catch {
-                  // The field can still be typed manually.
-                } finally {
-                  setBrowsing(false);
-                  setHintVisible(false);
-                }
+              onClick={() => {
+                addKeyword(custom, false);
+                setCustom('');
+                customRef.current?.focus();
               }}
-              className={`shrink-0 rounded-xl border border-slate-300 bg-slate-100 font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-200 disabled:opacity-50 ${
-                hero ? 'px-5 text-[17px]' : 'px-3.5 text-[16px]'
-              }`}
+              disabled={!custom.trim()}
+              className="rounded-full bg-aqua-500 px-3 py-1.5 text-[18px] font-semibold text-white transition hover:bg-aqua-600 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {browsing ? 'Choosing…' : 'Choose folder'}
+              Add
             </button>
-          </div>
-          {hintVisible && (
-            <span className="mt-1 block text-[15.5px] text-aqua-300">
-              A folder window is open — it may be behind your browser.
-            </span>
-          )}
-        </Field>
+            <button
+              type="button"
+              onClick={() => { setAdding(false); setCustom(''); }}
+              aria-label="Close"
+              className="px-1 text-[19px] text-mist-500 transition hover:text-mist-200"
+            >
+              ✕
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              setAdding(true);
+              requestAnimationFrame(() => customRef.current?.focus());
+            }}
+            className={`shrink-0 whitespace-nowrap rounded-full border border-dashed border-slate-400 bg-white font-semibold text-mist-400 transition hover:border-aqua-500 hover:text-aqua-300 ${chip}`}
+          >
+            + Other
+          </button>
+        )}
+      </div>
 
-        <SourcesInUse
-          sources={sources}
-          typed={values.extraSources}
-          country={values.country}
-          big={hero}
-        />
-
-        <Field
-          label="Extra source links"
-          hint="Optional. Web pages to read alongside Wikipedia, separated by commas."
-          big={hero}
-        >
-          <textarea
-            className={`${hero ? heroInputClass : inputClass} min-h-[60px] resize-y`}
-            placeholder="https://example.com/city-guide"
-            value={values.extraSources}
-            onChange={(event) => update('extraSources', event.target.value)}
+      <Field label="Save to folder" big={hero}>
+        <div className={`flex gap-1.5 ${hero ? 'flex-col sm:flex-row' : ''}`}>
+          <input
+            type="text"
+            required
+            className={input}
+            placeholder="e.g. D:\Places"
+            value={values.downloadPath}
+            onChange={(event) => update('downloadPath', event.target.value)}
           />
-        </Field>
+          <button
+            type="button"
+            disabled={browsing}
+            onClick={async () => {
+              setBrowsing(true);
+              setHintVisible(true);
+              try {
+                const picked = await browseFolder();
+                if (picked) update('downloadPath', picked);
+              } catch {
+                // The field can still be typed manually.
+              } finally {
+                setBrowsing(false);
+                setHintVisible(false);
+              }
+            }}
+            className={`shrink-0 rounded-xl border border-slate-300 bg-slate-100 font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-200 disabled:opacity-50 ${
+              hero ? 'px-5 py-2.5 text-[19px] sm:py-0' : 'px-3.5 text-[18px]'
+            }`}
+          >
+            {browsing ? 'Choosing…' : 'Browse…'}
+          </button>
+        </div>
+        {hintVisible && (
+          <span className="mt-1 block text-[18px] text-aqua-300">
+            A folder window is open — it may be behind your browser.
+          </span>
+        )}
+      </Field>
 
+      <div>
         <button
           type="submit"
           disabled={!canSubmit || loading}
-          className={`rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 font-semibold text-white shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-[0.99] disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none ${
-            hero ? 'mx-auto block w-full max-w-xs px-6 py-3 text-[17px]' : 'w-full px-4 py-2.5 text-[16px]'
+          // The button stays disabled until every answer is in; hovering it says which are missing.
+          title={canSubmit ? undefined : `Still needed: ${listOf(missing)}`}
+          className={`w-full rounded-xl font-semibold ${PRIMARY_BUTTON} ${
+            hero ? 'px-6 py-3 text-[20px] sm:mx-auto sm:block sm:max-w-xs' : 'px-4 py-2.5 text-[19px]'
           }`}
         >
           {loading ? 'Searching…' : 'Search'}
         </button>
 
-        {!canSubmit && (
-          <p className={`text-center text-mist-500 ${hero ? 'text-[14.5px]' : 'text-[15.5px]'}`}>
-            Enter {missing.join(' and ')} to search.
-          </p>
-        )}
       </div>
 
-      {/* Advanced — collapsed by default so the common path stays three fields */}
-      <div className="rounded-2xl border border-slate-200 bg-ink-900/40">
+      {/* Everything else, folded away so the common path is three answers. */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50">
         <button
           type="button"
           onClick={() => setShowAdvanced((open) => !open)}
           aria-expanded={showAdvanced}
-          className="flex w-full items-center justify-between px-3.5 py-2.5 text-[14.5px] font-semibold text-mist-300 transition hover:text-mist-100"
+          className="flex w-full items-center gap-2 px-3.5 py-2.5 text-left text-[18px] font-semibold text-mist-300 transition hover:text-mist-100"
         >
-          <span>Options</span>
-          <span aria-hidden className={`transition ${showAdvanced ? 'rotate-180' : ''}`}>⌄</span>
+          <span className="shrink-0 whitespace-nowrap">More options</span>
+          <span className="truncate font-normal text-mist-500">
+            {[
+              values.limit ? `max ${values.limit}` : null,
+              !values.useLlm ? 'AI off' : null,
+              !values.includeImages ? 'no photos' : null,
+              extraCount ? `${extraCount} link${extraCount === 1 ? '' : 's'}` : null,
+            ].filter(Boolean).join(' · ')}
+          </span>
+          <span aria-hidden className={`ml-auto transition ${showAdvanced ? 'rotate-180' : ''}`}>⌄</span>
         </button>
 
         {showAdvanced && (
-          <div className="space-y-3 border-t border-slate-200 p-3.5">
-            <Field
-              label="Max results"
-              hint="Blank means every place found. Each is researched separately, so large cities take longer."
-            >
+          <div className="space-y-3 border-t border-slate-200 bg-white p-3.5">
+            <Field label="Max results" hint="Blank takes every place found. Fewer finishes sooner.">
               <input
                 type="number"
                 min={0}
+                inputMode="numeric"
                 className={inputClass}
                 placeholder="All"
                 value={values.limit === 0 ? '' : values.limit}
@@ -431,6 +382,17 @@ export default function SearchForm({
               checked={values.includeImages}
               onChange={(checked) => update('includeImages', checked)}
             />
+
+            <Field label="Extra source links" hint="Web pages to read as well, separated by commas.">
+              <textarea
+                className={`${inputClass} min-h-[60px] resize-y`}
+                placeholder="https://example.com/city-guide"
+                value={values.extraSources}
+                onChange={(event) => update('extraSources', event.target.value)}
+              />
+            </Field>
+
+            <SourcesInUse sources={sources} typed={values.extraSources} country={values.country} />
           </div>
         )}
       </div>
@@ -442,25 +404,22 @@ export default function SearchForm({
  * What this search reads.
  *
  * Shows the sources the backend reported for the last run, plus anything
- * typed into the box below that has not been searched with yet, so adding a
+ * typed into the box above that has not been searched with yet, so adding a
  * link has visible effect before pressing Search.
  */
 function SourcesInUse({
   sources,
   typed,
   country,
-  big,
 }: {
   sources?: SourceLink[];
   typed: string;
   country?: string;
-  big?: boolean;
 }) {
   const pending = useMemo(() => {
     const known = new Set((sources ?? []).map((source) => source.url.toLowerCase()));
     const seen = new Set<string>();
     const out: SourceLink[] = [];
-
     for (const raw of typed.split(/[,\n]+/)) {
       const value = raw.trim();
       if (!value) continue;
@@ -498,62 +457,87 @@ function SourcesInUse({
   if (listed.length === 0 && pending.length === 0) return null;
 
   return (
-    <details className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-      <summary className="cursor-pointer list-none text-[15.5px] font-semibold text-mist-300 marker:hidden">
-        Sources ({listed.length})
-        {pending.length > 0 && (
-          <span className="ml-1.5 font-medium text-aqua-300">
-            +{pending.length} added
-          </span>
-        )}
+    <SourcesDisclosure
+      count={listed.length}
+      extra={pending.length > 0 ? `+${pending.length} added` : undefined}
+      footer={searched ? 'What this search read.' : 'Read for every place.'}
+    >
+      {pending.map((source) => (
+        <li key={`pending-${source.url}`} className="flex items-baseline gap-1.5">
+          <span className="shrink-0 rounded bg-aqua-500/10 px-1.5 text-[16px] font-semibold text-aqua-300">new</span>
+          <SourceAnchor source={source} />
+        </li>
+      ))}
+      {listed.map((source) => (
+        <li key={source.url}>
+          <SourceAnchor source={source} />
+        </li>
+      ))}
+    </SourcesDisclosure>
+  );
+}
+
+/**
+ * The folded list of sources, shared by single and batch search: closed until
+ * clicked, with a Show / Hide cue so it is obvious it opens.
+ */
+export function SourcesDisclosure({
+  count,
+  extra,
+  footer,
+  children,
+}: {
+  count: number;
+  extra?: string;
+  footer?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="group rounded-xl border border-slate-200 bg-white p-2.5">
+      <summary className="flex cursor-pointer list-none items-baseline gap-1.5 text-[18px] font-semibold text-mist-300 marker:hidden [&::-webkit-details-marker]:hidden">
+        Sources ({count})
+        {extra && <span className="truncate font-medium text-aqua-300">{extra}</span>}
+        <span className="ml-auto shrink-0 text-[17px] font-medium text-aqua-300">
+          <span className="group-open:hidden">Show ▸</span>
+          <span className="hidden group-open:inline">Hide ▾</span>
+        </span>
       </summary>
-
-      <ul className={`mt-2 space-y-1 ${big ? 'text-[15.5px]' : 'text-[15px]'}`}>
-        {pending.map((source) => (
-          <li key={`pending-${source.url}`} className="flex items-baseline gap-1.5">
-            <span className="shrink-0 rounded bg-aqua-500/10 px-1.5 text-[13.5px] font-semibold text-aqua-300">
-              new
-            </span>
-            <a
-              href={source.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="truncate text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
-            >
-              {source.label}
-            </a>
-          </li>
-        ))}
-        {listed.map((source) => (
-          <li key={source.url}>
-            <a
-              href={source.url}
-              target="_blank"
-              rel="noreferrer noopener"
-              title={source.url}
-              className="text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
-            >
-              {source.label}
-            </a>
-          </li>
-        ))}
-      </ul>
-
-      <p className="mt-1.5 text-[14.5px] text-mist-500">
-        {searched
-          ? 'What this search read.'
-          : 'Searched for every place. Add your own pages below.'}
-      </p>
+      <ul className="mt-2 space-y-1 text-[18px]">{children}</ul>
+      {footer && <p className="mt-1.5 text-[17px] text-mist-500">{footer}</p>}
     </details>
   );
 }
 
+export function SourceAnchor({ source }: { source: { label: string; url: string } }) {
+  return (
+    <a
+      href={source.url}
+      target="_blank"
+      rel="noreferrer noopener"
+      title={source.url}
+      className="break-words text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
+    >
+      {source.label}
+    </a>
+  );
+}
+
 const inputClass =
-  'w-full rounded-lg border border-slate-200 bg-ink-950/70 px-2.5 py-2 text-[15.5px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
+  'w-full min-w-0 rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[18px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
 
 /** Larger, roomier inputs for the first-run screen. */
 const heroInputClass =
-  'w-full rounded-xl border border-slate-300 bg-ink-950/70 px-3.5 py-3 text-[17px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
+  'w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3.5 py-3 text-[19px] font-medium text-mist-50 outline-none transition placeholder:text-mist-600 focus:border-aqua-500/50 focus:ring-2 focus:ring-aqua-500/15';
+
+/** A path the server can write to as given: a drive, a network share, or a root. */
+export function isAbsoluteFolder(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(path) || /^\\\\[^\\]/.test(path) || path.startsWith('/');
+}
+
+/** "a, b and c" */
+function listOf(items: string[]): string {
+  return items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
 
 function Field({
   label,
@@ -567,51 +551,52 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="block">
-      <span
-        className={`mb-1 block font-semibold text-mist-300 ${big ? 'text-[14.5px]' : 'text-[16px]'}`}
-      >
+    <label className="block min-w-0">
+      <span className={`mb-1 block font-semibold text-mist-300 ${big ? 'text-[18px]' : 'text-[18px]'}`}>
         {label}
       </span>
       {children}
-      {hint && <span className="mt-1 block text-[15.5px] leading-snug text-mist-500">{hint}</span>}
+      {hint && <span className="mt-1 block text-[17px] leading-snug text-mist-500">{hint}</span>}
     </label>
   );
 }
 
-function Toggle({
+export function Toggle({
   label,
   hint,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
-  hint: string;
+  hint?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="flex w-full items-start gap-2.5 text-left"
+      className="flex w-full items-start gap-2.5 text-left disabled:cursor-not-allowed disabled:opacity-60"
     >
       <span
-        className={`mt-0.5 flex h-[18px] w-[32px] shrink-0 items-center rounded-full p-0.5 transition ${
-          checked ? 'bg-aqua-500' : 'bg-ink-600'
+        className={`mt-0.5 flex h-[20px] w-[36px] shrink-0 items-center rounded-full p-0.5 transition ${
+          checked ? 'bg-teal-600' : 'bg-ink-600'
         }`}
       >
         <span
-          className={`h-[14px] w-[14px] rounded-full bg-white shadow transition-transform ${
-            checked ? 'translate-x-[14px]' : ''
+          className={`h-4 w-4 rounded-full bg-white shadow transition-transform ${
+            checked ? 'translate-x-4' : ''
           }`}
         />
       </span>
       <span className="min-w-0">
-        <span className="block text-[14.5px] font-medium text-mist-100">{label}</span>
-        <span className="block text-[15.5px] leading-snug text-mist-500">{hint}</span>
+        <span className="block text-[18px] font-medium text-mist-100">{label}</span>
+        {hint && <span className="block text-[17px] leading-snug text-mist-500">{hint}</span>}
       </span>
     </button>
   );

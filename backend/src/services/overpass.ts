@@ -97,8 +97,12 @@ export function buildOverpassQuery(
   const useArea = typeof area.areaId === 'number';
 
   const scope = useArea ? '(area.searchArea)' : '';
+  // Named places only. Unnamed ones are dropped below anyway, and the result
+  // limit counts them: for parks in Barcelona, all 150 elements Overpass
+  // returned were unnamed playgrounds, so the search got one named park out
+  // of hundreds and leaned entirely on Wikidata and Nominatim.
   const statements = mergeSelectors(resolved.selectors)
-    .map((selector) => `  nwr${selector}${scope};`)
+    .map((selector) => `  nwr${selector}["name"]${scope};`)
     .join('\n');
 
   const header = useArea
@@ -305,7 +309,7 @@ function coordsOf(element: OverpassElement): { lat: number; lon: number } | unde
 }
 
 /** Rough metres between two WGS84 points — good enough for dedupe radii. */
-function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+export function distanceMeters(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
   const R = 6_371_000;
   const dLat = ((b.lat - a.lat) * Math.PI) / 180;
   const dLon = ((b.lon - a.lon) * Math.PI) / 180;

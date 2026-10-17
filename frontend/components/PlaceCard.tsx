@@ -83,34 +83,34 @@ export default function PlaceCard({
         )}
 
         {/* Scrim keeps the overlaid title legible on any photo */}
-        <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/45 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/25 to-transparent" />
 
         <div className="absolute left-2.5 top-2.5 flex items-center gap-1.5">
-          <span className="grid h-5 min-w-5 place-items-center rounded-md bg-ink-950/75 px-1.5 text-[15.5px] font-bold tabular-nums text-mist-100 backdrop-blur">
+          <span className="grid h-6 min-w-6 place-items-center rounded-md bg-white/90 px-1.5 text-[16px] font-bold tabular-nums text-mist-100 backdrop-blur">
             {index + 1}
           </span>
           {isUltraHd && (
-            <span className="rounded-md bg-ember-500/90 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-white">
-              Ultra HD
+            <span className="rounded-md bg-ember-500/90 px-1.5 py-0.5 text-[15px] font-bold uppercase tracking-wide text-white">
+              HD photo
             </span>
           )}
         </div>
 
         <span
-          title={`Quality score ${place.qualityScore}/100`}
-          className="absolute right-2.5 top-2.5 rounded-md bg-ink-950/75 px-1.5 py-0.5 text-[15.5px] font-semibold tabular-nums text-mist-200 backdrop-blur"
+          title={`How well this place matches your search: ${place.qualityScore} out of 100`}
+          className="absolute right-2.5 top-2.5 rounded-md bg-white/90 px-1.5 py-0.5 text-[16px] font-semibold tabular-nums text-mist-200 backdrop-blur"
         >
-          {place.qualityScore}
+          Match {place.qualityScore}%
         </span>
 
         <div className="absolute inset-x-0 bottom-0 p-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="rounded-md bg-aqua-500/20 px-1.5 py-0.5 text-[17px] font-semibold uppercase tracking-wide text-aqua-300 ring-1 ring-inset ring-aqua-400/25">
+            <span className="rounded-md bg-white/90 px-1.5 py-0.5 text-[15px] font-semibold uppercase tracking-wide text-aqua-300 ring-1 ring-inset ring-aqua-400/25">
               {place.categoryLabel}
             </span>
             {place.llmProcessed && (
-              <span className="rounded-md bg-slate-200 px-1.5 py-0.5 text-[17px] font-medium text-mist-300">
-                LLM-cleaned
+              <span className="rounded-md bg-white/90 px-1.5 py-0.5 text-[15px] font-medium text-mist-300">
+                AI-checked
               </span>
             )}
           </div>
@@ -118,7 +118,7 @@ export default function PlaceCard({
           <h3
             dir="auto"
             title={place.name}
-            className="mt-1 truncate text-[17px] font-semibold text-balance-tight text-white drop-shadow"
+            className="mt-1 truncate text-[20px] font-semibold text-balance-tight text-white drop-shadow"
           >
             {place.name}
           </h3>
@@ -129,14 +129,14 @@ export default function PlaceCard({
       <div className="px-3 pb-2.5 pt-2.5">
         <p
           dir="auto"
-          className={`text-[17px] leading-relaxed text-mist-400 ${expanded ? '' : 'line-clamp-2'}`}
+          className={`text-[18px] leading-relaxed text-mist-400 ${expanded ? '' : 'line-clamp-2'}`}
         >
           {summary}
         </p>
         {isLong && (
           <button
             type="button"
-            className="mt-1 text-[16px] font-semibold text-aqua-400 transition hover:text-aqua-300"
+            className="mt-1 text-[18px] font-semibold text-aqua-400 transition hover:text-aqua-300"
             onClick={(event) => {
               event.stopPropagation();
               setExpanded((open) => !open);
@@ -151,7 +151,7 @@ export default function PlaceCard({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-1.5 border-t border-slate-200 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-t border-slate-200 px-3 py-2">
         {onAddSuggestion && (
           <button
             type="button"
@@ -159,13 +159,13 @@ export default function PlaceCard({
               event.stopPropagation();
               onAddSuggestion(place);
             }}
-            className="flex items-center gap-1 rounded-lg border border-aqua-500/30 bg-aqua-500/10 px-2.5 py-1.5 text-[16px] font-semibold text-aqua-300 transition hover:border-aqua-500/50 hover:bg-aqua-500/20"
+            className="flex items-center gap-1 whitespace-nowrap rounded-lg border border-aqua-500/30 bg-aqua-500/10 px-2.5 py-1.5 text-[18px] font-semibold text-aqua-300 transition hover:border-aqua-500/50 hover:bg-aqua-500/20"
             title={`Search for "${place.categoryLabel}" in ${city}`}
           >
             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
               <path fill="currentColor" d="M12 4v16m-8-8h16" />
             </svg>
-            Add
+            More like this
           </button>
         )}
         <button
@@ -175,12 +175,12 @@ export default function PlaceCard({
             event.stopPropagation();
             onDownload(place);
           }}
-          className="flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 text-[16px] font-semibold text-mist-300 transition hover:border-slate-400 hover:bg-slate-100 hover:text-mist-100 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 whitespace-nowrap rounded-lg border border-slate-300 px-2.5 py-1.5 text-[18px] font-semibold text-mist-300 transition hover:border-slate-400 hover:bg-slate-100 hover:text-mist-100 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {downloading ? (
             <>
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              Zipping
+              Saving…
             </>
           ) : (
             <>
@@ -195,11 +195,11 @@ export default function PlaceCard({
         <div className="ml-auto flex items-center gap-0.5">
           {place.wikipediaUrl && (
             <IconLink href={place.wikipediaUrl} label="Wikipedia article">
-              <span className="text-[14.5px] font-bold leading-none">W</span>
+              <span className="text-[16px] font-semibold leading-none">Wikipedia</span>
             </IconLink>
           )}
           <IconLink href={place.osmUrl} label="View on OpenStreetMap">
-            <span className="text-[17px] font-bold leading-none">OSM</span>
+            <span className="text-[16px] font-semibold leading-none">Map</span>
           </IconLink>
         </div>
       </div>
@@ -232,10 +232,10 @@ function IconLink({
 }
 
 const LINK_STYLE: Record<string, string> = {
-  reviews: 'text-emerald-700 hover:bg-emerald-500/15 ring-emerald-400/25',
-  tours: 'text-ember-300 hover:bg-ember-500/15 ring-ember-400/25',
-  booking: 'text-sky-700 hover:bg-sky-500/15 ring-sky-400/25',
-  guide: 'text-violet-300 hover:bg-violet-500/15 ring-violet-400/25',
+  reviews: 'text-teal-800 hover:bg-teal-50 ring-teal-200',
+  tours: 'text-teal-800 hover:bg-teal-50 ring-teal-200',
+  booking: 'text-teal-800 hover:bg-teal-50 ring-teal-200',
+  guide: 'text-teal-800 hover:bg-teal-50 ring-teal-200',
   reference: 'text-mist-300 hover:bg-slate-200 ring-slate-300',
 };
 
@@ -258,7 +258,7 @@ function TravelLinks({ place }: { place: Place }) {
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1">
-      <span className="mr-0.5 text-[9.5px] font-semibold uppercase tracking-wider text-mist-500">
+      <span className="mr-0.5 text-[15px] font-semibold uppercase tracking-wider text-mist-500">
         Book
       </span>
       {links.map((link) => (
@@ -273,7 +273,7 @@ function TravelLinks({ place }: { place: Place }) {
               : `${LINK_HINT[link.kind] ?? 'Open'} — ${link.label}`
           }
           onClick={(event) => event.stopPropagation()}
-          className={`rounded-md px-1.5 py-0.5 text-[15.5px] font-medium ring-1 ring-inset transition ${
+          className={`rounded-md px-1.5 py-0.5 text-[17px] font-medium ring-1 ring-inset transition ${
             LINK_STYLE[link.kind] ?? 'text-mist-300 ring-slate-300 hover:bg-slate-200'
           }`}
         >
@@ -333,11 +333,11 @@ function Chip({
   title?: string;
 }) {
   const className =
-    'flex max-w-full items-center gap-1 rounded-md bg-slate-50 px-1.5 py-0.5 text-[15.5px] text-mist-400 transition hover:bg-slate-50';
+    'flex max-w-full items-center gap-1 rounded-md bg-ink-800 px-1.5 py-0.5 text-[17px] text-mist-400 transition hover:bg-slate-50';
 
   const inner = (
     <>
-      <span aria-hidden className="shrink-0 text-[9px] leading-none opacity-70">
+      <span aria-hidden className="shrink-0 text-[15px] leading-none opacity-70">
         {icon}
       </span>
       <span className="truncate">{children}</span>

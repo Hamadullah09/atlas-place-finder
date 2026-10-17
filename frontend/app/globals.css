@@ -55,7 +55,7 @@
   color-scheme: light;
   /* Larger base so every rem-based size in the app scales up together.
      The audience includes people who find default web text too small. */
-  font-size: 17px;
+  font-size: 18px;
 }
 
 html,
@@ -65,6 +65,11 @@ body {
 
 body {
   background-color: var(--color-ink-950);
+  /* One faint wash of the accent colour, top left and bottom right. */
+  background-image:
+    radial-gradient(at 0% 0%, rgb(13 148 136 / 0.08) 0, transparent 50%),
+    radial-gradient(at 100% 100%, rgb(13 148 136 / 0.06) 0, transparent 50%);
+  background-attachment: fixed;
   color: var(--color-mist-200);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
@@ -144,6 +149,24 @@ body {
 
 .scroll-region:hover::-webkit-scrollbar-thumb {
   background-color: #94a3b8;
+}
+
+/* Quick-pick chips: one swipeable row on a phone. The fade at the right edge
+   says there is more to swipe to; from `sm` up the row wraps instead. */
+.chip-row {
+  scrollbar-width: none;
+}
+
+.chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  .chip-row {
+    -webkit-mask-image: linear-gradient(to right, #000 85%, transparent);
+    mask-image: linear-gradient(to right, #000 85%, transparent);
+    padding-right: 1.5rem;
+  }
 }
 
 /* ---------------------------------------------------------------------------

@@ -136,7 +136,12 @@ export function checkPublicHttpsUrl(value: string): URL {
   return url;
 }
 
-function getOnce(url: URL): Promise<{ status: number; location?: string; contentType: string; body: Buffer }> {
+/**
+ * One request, no redirects followed. With `headBytes`, stops reading once
+ * that much has arrived and returns just the start of the file -- enough for
+ * an image's dimensions, which every format keeps in its first bytes.
+ */
+function getOnce(url: URL, headBytes?: number, referer?: string): Promise<{ status: number; location?: string; contentType: string; body: Buffer }> {
   const maxBytes = config.limits.maxImageBytes;
 
   return new Promise((resolve, reject) => {
@@ -146,6 +151,9 @@ function getOnce(url: URL): Promise<{ status: number; location?: string; content
       headers: {
         'User-Agent': config.userAgent,
         Accept: 'image/*',
+        // Some sites refuse their own photos to a request that names no page,
+        // as hotlink protection; a browser showing the page would send this.
+        ...(referer ? { Referer: referer } : {}),
       },
     }, (response) => {
       const status = response.statusCode ?? 0;
@@ -157,7 +165,7 @@ function getOnce(url: URL): Promise<{ status: number; location?: string; content
       }
 
       const declared = Number(response.headers['content-length']);
-      if (Number.isFinite(declared) && declared > maxBytes) {
+      if (!headBytes && Number.isFinite(declared) && declared > maxBytes) {
         response.destroy();
         reject(new Error(`image is ${declared} bytes, over the ${maxBytes} limit`));
         return;
@@ -167,6 +175,16 @@ function getOnce(url: URL): Promise<{ status: number; location?: string; content
       let received = 0;
       response.on('data', (chunk: Buffer) => {
         received += chunk.length;
+        if (headBytes && received >= headBytes) {
+          chunks.push(chunk);
+          resolve({
+            status,
+            contentType: String(response.headers['content-type'] ?? ''),
+            body: Buffer.concat(chunks),
+          });
+          response.destroy();
+          return;
+        }
         if (received > maxBytes) {
           response.destroy(new Error(`image exceeded the ${maxBytes} byte limit`));
           return;
@@ -193,11 +211,14 @@ function getOnce(url: URL): Promise<{ status: number; location?: string; content
  * check; letting the client follow them would let a public URL bounce the
  * request somewhere private.
  */
-export async function fetchPublicImage(value: string): Promise<{ buffer: Buffer; contentType: string }> {
+export async function fetchPublicImage(
+  value: string,
+  options: { headBytes?: number; referer?: string } = {},
+): Promise<{ buffer: Buffer; contentType: string }> {
   let current = checkPublicHttpsUrl(value);
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    const response = await getOnce(current);
+    const response = await getOnce(current, options.headBytes, options.referer);
 
     if (response.status >= 300 && response.status < 400) {
       if (!response.location) throw new Error(`redirect without a location (${response.status})`);

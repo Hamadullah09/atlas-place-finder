@@ -4,12 +4,16 @@
  *
  * These are government or state-agency sites. Their text is public and is used
  * here the same way a user-supplied "additional source" is: fetched, reduced to
- * plain text, and mined for passages about a specific place. Their PHOTOGRAPHS
- * are not touched -- those are all rights reserved, unlike the Commons and
- * Openverse imagery the picture pipeline uses.
+ * plain text, and mined for passages about a specific place. Their photographs
+ * fill in for places the openly licensed sources left short; unlike Commons
+ * and Openverse imagery they are all rights reserved, and are credited and
+ * marked so (services/tourismImages.ts).
  *
- * Every URL below was opened over HTTP on 25 Sep 2026; 184 of 196 countries
- * have one. Sourced from Wikidata, Wikipedia category members and, where those
+ * Every URL below was opened over HTTP on 25 Sep 2026; 182 of 196 countries
+ * have one. On 10 Oct 2026 twelve entries were found not to be national
+ * tourism sites (a clinic, a zoo, a gambling regulator, city sites...) and
+ * were replaced with the country's real one, or removed where none could be
+ * confirmed. Sourced from Wikidata, Wikipedia category members and, where those
  * were empty or wrong, a web search whose result was then opened and read.
  * Countries with no confirmed national site are simply absent.
  */
@@ -114,11 +118,6 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
     organisation: "Bahrain Tourism and Exhibitions Authority",
     url: "https://www.btea.bh",
   },
-  BI: {
-    country: "Burundi",
-    organisation: "Ministry of Hydraulics, Energy and Mines",
-    url: "https://mrmeict.gov.bi/",
-  },
   BJ: {
     country: "Benin",
     organisation: "Government of Benin — tourism sector",
@@ -151,8 +150,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   BW: {
     country: "Botswana",
-    organisation: "Botswana Gambling Authority",
-    url: "https://gamblingauthority.co.bw",
+    organisation: "Botswana Tourism Organisation",
+    url: "https://www.botswanatourism.co.bw/",
   },
   BY: {
     country: "Belarus",
@@ -321,7 +320,7 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   GN: {
     country: "Guinea",
-    organisation: "Q123165625",
+    organisation: "Official tourism site (Guinea)",
     url: "https://tourisme.gov.gn/",
   },
   GR: {
@@ -411,8 +410,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   JP: {
     country: "Japan",
-    organisation: "Japan National Tourism Organization",
-    url: "https://www.jnto.go.jp/",
+    organisation: "Japan National Tourism Organization — Travel Japan",
+    url: "https://www.japan.travel/en/",
   },
   KE: {
     country: "Kenya",
@@ -506,8 +505,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   LU: {
     country: "Luxembourg",
-    organisation: "École d'Hôtellerie et de Tourisme du Luxembourg",
-    url: "https://www.ehtl.lu/",
+    organisation: "Luxembourg for Tourism — Visit Luxembourg",
+    url: "https://www.visitluxembourg.com/",
   },
   LV: {
     country: "Latvia",
@@ -521,8 +520,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   MC: {
     country: "Monaco",
-    organisation: "Zoological Garden of Monaco",
-    url: "http://www.monte-carlo.mc/en/tourism/zoo/",
+    organisation: "Monaco Government Tourist and Convention Authority — Visit Monaco",
+    url: "https://www.visitmonaco.com/",
   },
   MD: {
     country: "Moldova",
@@ -621,18 +620,18 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   NO: {
     country: "Norway",
-    organisation: "VISIT ALTA AS",
-    url: "https://visitalta.no",
+    organisation: "Visit Norway (Innovation Norway)",
+    url: "https://www.visitnorway.com/",
   },
   NP: {
     country: "Nepal",
-    organisation: "Visit Nepal 2020",
-    url: "https://visitnepal2020.com/",
+    organisation: "Nepal Tourism Board",
+    url: "https://ntb.gov.np/",
   },
   NZ: {
     country: "New Zealand",
-    organisation: "Transport World",
-    url: "http://transportworld.nz/",
+    organisation: "Tourism New Zealand",
+    url: "https://www.newzealand.com/",
   },
   OM: {
     country: "Oman",
@@ -666,8 +665,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   PL: {
     country: "Poland",
-    organisation: "Tour & Travel Warsaw",
-    url: "https://ttwarsaw.pl/en/",
+    organisation: "Polish Tourism Organisation — Poland Travel",
+    url: "https://www.poland.travel/en/",
   },
   PS: {
     country: "Palestine",
@@ -716,8 +715,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   SA: {
     country: "Saudi Arabia",
-    organisation: "Arab Tourism Organization",
-    url: "https://www.arab-tourismorg.org/",
+    organisation: "Saudi Tourism Authority — Visit Saudi",
+    url: "https://www.visitsaudi.com/en",
   },
   SB: {
     country: "Solomon Islands",
@@ -736,8 +735,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   SE: {
     country: "Sweden",
-    organisation: "Official tourism site",
-    url: "http://www.visitumeacity.se/en",
+    organisation: "Visit Sweden",
+    url: "https://visitsweden.com/",
   },
   SG: {
     country: "Singapore",
@@ -799,11 +798,6 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
     organisation: "Eswatini Tourism Authority",
     url: "https://www.thekingdomofeswatini.com/",
   },
-  TD: {
-    country: "Chad",
-    organisation: "Chad Volunteers Organization",
-    url: "https://www.chadvolunteers.org",
-  },
   TG: {
     country: "Togo",
     organisation: "Togo Tourisme (Ministry of Tourism)",
@@ -841,8 +835,8 @@ export const TOURISM_SOURCES: Readonly<Record<string, TourismSource>> = {
   },
   TR: {
     country: "Turkey",
-    organisation: "Alpha Clinic Turkey",
-    url: "https://alphaclinicturkey.com/",
+    organisation: "Türkiye Tourism Promotion and Development Agency — GoTürkiye",
+    url: "https://goturkiye.com/",
   },
   TT: {
     country: "Trinidad and Tobago",

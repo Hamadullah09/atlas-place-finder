@@ -93,3 +93,14 @@ describe('mergeSelectors', () => {
     }
   });
 });
+
+it('asks Overpass for named places only', async () => {
+  // Parks in Barcelona: the 150-element limit was filled by unnamed
+  // playgrounds, and only one named park came back.
+  const { buildOverpassQuery } = await import('./overpass.ts');
+  const { resolveKeyword } = await import('../lib/taxonomy.ts');
+  const query = buildOverpassQuery(resolveKeyword('parks'), { areaId: 3600347950, bbox: [41.3, 2.05, 41.47, 2.23] }, 150);
+  for (const line of query.split('\n').filter((l) => l.trim().startsWith('nwr'))) {
+    assert.ok(line.includes('["name"]'), `unnamed elements would fill the limit: ${line}`);
+  }
+});

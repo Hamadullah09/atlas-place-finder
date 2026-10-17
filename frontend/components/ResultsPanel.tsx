@@ -2,6 +2,8 @@
 
 import { useMemo, useState } from 'react';
 import PlaceCard from '@/components/PlaceCard';
+import { formatDuration, placesPerHour, shortPath } from '@/lib/format';
+import { PRIMARY_BUTTON } from '@/lib/palette';
 import type { Place, SearchResult, SourceLink } from '@/lib/types';
 
 type SortKey = 'quality' | 'name' | 'images';
@@ -19,6 +21,8 @@ interface ResultsPanelProps {
   onAddSuggestion?: (place: Place) => void;
   /** Set when the operator chose a folder — changes the wording and icon. */
   savePath?: string;
+  /** How long writing this result into the folder took, once it has been. */
+  exportMs?: number;
 }
 
 export default function ResultsPanel({
@@ -33,6 +37,7 @@ export default function ResultsPanel({
   onDownloadAll,
   onAddSuggestion,
   savePath,
+  exportMs,
 }: ResultsPanelProps) {
   const [sortKey, setSortKey] = useState<SortKey>('quality');
   const [onlyWithImages, setOnlyWithImages] = useState(false);
@@ -59,7 +64,7 @@ export default function ResultsPanel({
       {/* Summary header */}
       <div className="shrink-0 px-1 pb-2.5">
         <div className="flex items-baseline gap-2">
-          <h2 className="text-[19px] font-semibold tracking-tight text-mist-50">
+          <h2 className="text-[23px] font-semibold tracking-tight text-mist-50">
             <span className="tabular-nums">{places.length}</span>{' '}
             <span className="text-mist-400">
               {places.length === 1 ? 'place' : 'places'} in
@@ -67,30 +72,42 @@ export default function ResultsPanel({
             {result.area.city}
           </h2>
         </div>
-        <p className="mt-0.5 truncate text-[16px] text-mist-500" title={result.area.displayName}>
+        <p className="mt-0.5 truncate text-[19px] text-mist-500" title={result.area.displayName}>
           {result.area.displayName}
         </p>
 
+        {/* What was found, then where the time went: the search, then the
+            write-ups and photos once they have been saved. */}
         <div className="mt-2 flex flex-wrap items-center gap-1">
-          <Stat value={String(result.stats.overpassMatches)} label="OSM elements" />
-          <Stat value={String(result.stats.withImages)} label="with imagery" />
+          <Stat value={String(result.stats.withImages)} label="with photos" tone={STAT} />
           <Stat
-            value={`${(result.stats.elapsedMs / 1000).toFixed(1)}s`}
-            label={result.stats.llmUsed ? shortModel(result.stats.llmModel) : 'rule-based'}
-            accent={result.stats.llmUsed}
+            value="AI"
+            label={result.stats.llmUsed ? shortModel(result.stats.llmModel) : 'off'}
+            tone={STAT}
           />
+          <Stat value={formatDuration(result.stats.elapsedMs)} label="searching" tone={STAT} />
+          {exportMs !== undefined && (
+            <>
+              <Stat value={formatDuration(exportMs)} label="saving" tone={STAT} />
+              <Stat
+                value={formatDuration(result.stats.elapsedMs + exportMs)}
+                label={`total · ~${placesPerHour(result.places.length, result.stats.elapsedMs + exportMs)}/hour`}
+                tone="bg-teal-50 text-teal-800 ring-1 ring-inset ring-teal-200"
+              />
+            </>
+          )}
         </div>
 
         {result.stats.warnings.length > 0 && (
           <details className="group mt-2 rounded-xl border border-ember-500/20 bg-ember-500/[0.07] px-2.5 py-1.5">
-            <summary className="cursor-pointer list-none text-[16px] font-medium text-ember-300 marker:hidden">
+            <summary className="cursor-pointer list-none text-[19px] font-medium text-ember-300 marker:hidden">
               <span className="inline-flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-ember-400" />
                 {result.stats.warnings.length} note
                 {result.stats.warnings.length === 1 ? '' : 's'} about this search
               </span>
             </summary>
-            <ul className="mt-1.5 space-y-1 border-t border-ember-500/15 pt-1.5 text-[15.5px] leading-relaxed text-ember-300/75">
+            <ul className="mt-1.5 space-y-1 border-t border-ember-500/15 pt-1.5 text-[18px] leading-relaxed text-ember-300/75">
               {result.stats.warnings.map((warning) => (
                 <li key={warning}>{warning}</li>
               ))}
@@ -109,7 +126,7 @@ export default function ResultsPanel({
           type="button"
           onClick={onDownloadAll}
           disabled={downloadingAll || result.places.length === 0}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-aqua-500 px-4 py-3 text-[17px] font-semibold text-white shadow-md transition hover:bg-aqua-600 disabled:cursor-not-allowed disabled:bg-ink-700 disabled:text-mist-500 disabled:shadow-none"
+          className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-[20px] font-semibold ${PRIMARY_BUTTON}`}
         >
           {downloadingAll ? (
             <>
@@ -129,8 +146,9 @@ export default function ResultsPanel({
         </button>
 
         {savePath && (
-          <p className="mt-1.5 text-center text-[13px] text-mist-500">
-            Saved automatically to {savePath}
+          <p className="mt-1.5 truncate text-center text-[16px] text-mist-500" title={savePath}>
+            Saved automatically to{' '}
+            <span className="font-medium text-mist-300">{shortPath(savePath)}</span>
           </p>
         )}
       </div>
@@ -140,7 +158,7 @@ export default function ResultsPanel({
         <button
           type="button"
           onClick={() => setOnlyWithImages((on) => !on)}
-          className={`rounded-lg border px-2 py-1.5 text-[16px] font-medium transition ${
+          className={`rounded-lg border px-2 py-1.5 text-[19px] font-medium transition ${
             onlyWithImages
               ? 'border-aqua-500/40 bg-aqua-500/15 text-aqua-300'
               : 'border-slate-200 text-mist-400 hover:border-slate-300 hover:text-mist-200'
@@ -153,7 +171,7 @@ export default function ResultsPanel({
           value={sortKey}
           onChange={(event) => setSortKey(event.target.value as SortKey)}
           aria-label="Sort results"
-          className="ml-auto rounded-lg border border-slate-200 bg-ink-850 px-2 py-1.5 text-[16px] font-medium text-mist-300 outline-none transition hover:border-slate-300 focus:border-aqua-500/50"
+          className="ml-auto rounded-lg border border-slate-200 bg-ink-850 px-2 py-1.5 text-[19px] font-medium text-mist-300 outline-none transition hover:border-slate-300 focus:border-aqua-500/50"
         >
           <option value="quality">Best match</option>
           <option value="name">Name A→Z</option>
@@ -162,7 +180,7 @@ export default function ResultsPanel({
       </div>
 
       {downloadingAll && (
-        <p className="mt-2 shrink-0 rounded-xl bg-slate-50 px-2.5 py-2 text-[15.5px] leading-relaxed text-mist-400">
+        <p className="mt-2 shrink-0 rounded-xl bg-slate-50 px-2.5 py-2 text-[18px] leading-relaxed text-mist-400">
           Fetching source images, rendering one PDF per place, and writing into{' '}
           <code className="rounded bg-slate-100/40 px-1 text-aqua-300">
             {result.area.country}/{result.area.city}/…
@@ -174,7 +192,7 @@ export default function ResultsPanel({
       {/* List */}
       {places.length === 0 ? (
         <div className="mt-6 rounded-2xl border border-dashed border-slate-300 px-4 py-8 text-center">
-          <p className="text-[15.5px] text-mist-400">
+          <p className="text-[18px] text-mist-400">
             {onlyWithImages
               ? 'No results have photos.'
               : `Nothing matching “${result.query.keyword}” in ${result.area.city}.`}
@@ -183,7 +201,7 @@ export default function ResultsPanel({
             <button
               type="button"
               onClick={() => setOnlyWithImages(false)}
-              className="mt-2 text-[14.5px] font-semibold text-aqua-400 hover:text-aqua-300"
+              className="mt-2 text-[17px] font-semibold text-aqua-400 hover:text-aqua-300"
             >
               Show all results
             </button>
@@ -218,10 +236,10 @@ function shortModel(model: string | undefined): string {
 function SourceLinksSection({ sources }: { sources: SourceLink[] }) {
   const [expanded, setExpanded] = useState(false);
   const KIND_META: Record<SourceLink['kind'], { label: string; className: string }> = {
-    discovery: { label: 'Discovery', className: 'text-aqua-300 bg-aqua-500/10' },
-    image: { label: 'Imagery', className: 'text-violet-700 bg-violet-500/10' },
-    reference: { label: 'Reference', className: 'text-sky-700 bg-sky-500/10' },
-    extra: { label: 'Extra', className: 'text-ember-300 bg-ember-500/10' },
+    discovery: { label: 'Finding places', className: 'text-teal-800 bg-teal-50' },
+    image: { label: 'Photos', className: 'text-teal-800 bg-teal-50' },
+    reference: { label: 'Background reading', className: 'text-teal-800 bg-teal-50' },
+    extra: { label: 'Official and your own sites', className: 'text-teal-800 bg-teal-50' },
   };
 
   const grouped = useMemo(() => {
@@ -239,14 +257,18 @@ function SourceLinksSection({ sources }: { sources: SourceLink[] }) {
     <details
       open={expanded}
       onToggle={(event) => setExpanded((event.target as HTMLDetailsElement).open)}
-      className="mt-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5"
+      className="group mt-2 rounded-xl border border-slate-200 bg-white p-2.5"
     >
-      <summary className="cursor-pointer list-none text-[16px] font-medium text-mist-300 marker:hidden">
+      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[18px] font-semibold text-mist-300 marker:hidden [&::-webkit-details-marker]:hidden">
+        <span className="ml-auto order-last shrink-0 text-[17px] font-medium text-aqua-300">
+          <span className="group-open:hidden">Show ▸</span>
+          <span className="hidden group-open:inline">Hide ▾</span>
+        </span>
         <span className="inline-flex items-center gap-1.5">
           <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden>
             <path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
           </svg>
-          Data Sources ({sources.length})
+          Sources ({sources.length})
         </span>
       </summary>
       <div className="mt-2 space-y-2">
@@ -254,7 +276,7 @@ function SourceLinksSection({ sources }: { sources: SourceLink[] }) {
           const meta = KIND_META[kind];
           return (
             <div key={kind}>
-              <span className={`inline-block rounded-md px-1.5 py-0.5 text-[14.5px] font-semibold ${meta.className}`}>
+              <span className={`inline-block rounded-md px-1.5 py-0.5 text-[17px] font-semibold ${meta.className}`}>
                 {meta.label}
               </span>
               <ul className="mt-1 space-y-0.5">
@@ -264,7 +286,7 @@ function SourceLinksSection({ sources }: { sources: SourceLink[] }) {
                       href={source.url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="text-[15.5px] text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
+                      className="text-[18px] text-mist-400 underline-offset-2 hover:text-aqua-300 hover:underline"
                       title={source.url}
                     >
                       {source.label}
@@ -281,15 +303,14 @@ function SourceLinksSection({ sources }: { sources: SourceLink[] }) {
   );
 }
 
-function Stat({ value, label, accent }: { value: string; label: string; accent?: boolean }) {
+/** Plain stats are neutral; only the total is picked out in the accent. */
+const STAT = 'bg-slate-100 text-mist-300';
+
+function Stat({ value, label, tone }: { value: string; label: string; tone: string }) {
   return (
-    <span
-      className={`flex items-baseline gap-1 rounded-md px-1.5 py-0.5 text-[15.5px] ${
-        accent ? 'bg-aqua-500/12 text-aqua-300' : 'bg-slate-50 text-mist-400'
-      }`}
-    >
+    <span className={`flex items-baseline gap-1 rounded-md px-2 py-0.5 text-[18px] ${tone}`}>
       <span className="font-semibold tabular-nums">{value}</span>
-      <span className="opacity-70">{label}</span>
+      <span className="opacity-85">{label}</span>
     </span>
   );
 }
@@ -303,10 +324,10 @@ function EmptyState() {
       >
         🧭
       </span>
-      <h2 className="mt-3.5 text-[16px] font-semibold tracking-tight text-mist-100">
+      <h2 className="mt-3.5 text-[19px] font-semibold tracking-tight text-mist-100">
         Search anywhere on earth
       </h2>
-      <p className="mt-1.5 max-w-[280px] text-[17px] leading-relaxed text-mist-500">
+      <p className="mt-1.5 max-w-[280px] text-[20px] leading-relaxed text-mist-500">
         Search for places anywhere on earth. Results come from OpenStreetMap and are exported with rich image and PDF support.
       </p>
     </div>
@@ -316,13 +337,13 @@ function EmptyState() {
 function ErrorState({ message }: { message: string }) {
   return (
     <div className="rounded-2xl border border-red-500/25 bg-red-500/[0.07] p-4">
-      <p className="flex items-center gap-2 text-[15.5px] font-semibold text-red-700">
-        <span className="grid h-5 w-5 place-items-center rounded-full bg-red-500/20 text-[16px]">
+      <p className="flex items-center gap-2 text-[18px] font-semibold text-red-700">
+        <span className="grid h-5 w-5 place-items-center rounded-full bg-red-500/20 text-[19px]">
           !
         </span>
         Search failed
       </p>
-      <p className="mt-1.5 text-[16px] leading-relaxed text-red-700/80">{message}</p>
+      <p className="mt-1.5 text-[19px] leading-relaxed text-red-700/80">{message}</p>
     </div>
   );
 }

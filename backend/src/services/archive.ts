@@ -13,7 +13,7 @@ import { excerptsForPlace, type ExtraSourceDoc } from './extraSources.js';
 import { isAllowedImageUrl, notifyUnsplashDownload } from './images.js';
 import { renderPlacePdf, renderSummaryPdf, type PdfImageAsset } from './pdf.js';
 import { setStage, type SearchProgress } from './progress.js';
-import { generateWriteups } from './writeup.js';
+import { generateWriteupFor } from './writeup.js';
 import type { Place, PlaceContent, PlaceWriteup, SearchResult } from '../types.js';
 
 /**
@@ -67,6 +67,8 @@ function captionFor(place: Place, index: number): string {
     image.credit ? `— ${image.credit}` : '',
     image.license ? `[${image.license}]` : '',
     `via ${image.source}`,
+    // An all-rights-reserved photo needs its page, so permission can be asked.
+    image.source === 'tourism' && image.sourcePage ? `(${image.sourcePage})` : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -113,11 +115,14 @@ async function downloadPlaceImages(
   if (images.length === 0) return [];
 
   const settled = await mapLimit(images, config.archiveDownloadConcurrency, async (image, index) => {
-    // Web-search results point at whatever site published the photo, so no
-    // allowlist can cover them; they must instead reach a public address.
+    // Web-search results and official tourism sites point at whatever host
+    // serves the photo, so no allowlist can cover them; they must instead
+    // reach a public address.
     // Everything else still has to come from a known image host.
-    const { buffer, contentType } = image.source === 'brave'
-      ? await fetchPublicImage(image.downloadUrl)
+    const { buffer, contentType } = image.source === 'brave' || image.source === 'tourism'
+      ? await fetchPublicImage(image.downloadUrl, {
+        referer: image.source === 'tourism' ? image.sourcePage : undefined,
+      })
       : await (async () => {
         if (!isAllowedImageUrl(image.downloadUrl)) {
           throw new Error(`image host not allowed: ${safeHost(image.downloadUrl)}`);
@@ -214,6 +219,8 @@ export interface FolderResult {
   path: string;
   files: number;
   bytes: number;
+  /** Places that really reached the folder; one with no photo is left out. */
+  exportedIds: string[];
 }
 
 /**
@@ -316,7 +323,7 @@ function folderSink(root: string): OutputSink {
 async function buildInto(
   destination: Destination,
   input: ArchiveInput,
-): Promise<{ files: number; bytes: number }> {
+): Promise<{ files: number; bytes: number; exportedIds: string[] }> {
   const options = input.options ?? {};
   const includeImages = options.includeImages ?? true;
   const embedCount = Math.max(
@@ -349,54 +356,60 @@ async function buildInto(
     ? zipSink(destination.stream, notes)
     : folderSink(destination.root);
 
-  // ---- Research + write-up pass ------------------------------------------
-  // Runs before any file is appended so the archive streams out in one go.
+  // ---- Research ------------------------------------------------------------
+  // Started now but not waited for: photo downloads begin straight away, and a
+  // place only waits for the research when it is ready for its write-up. It
+  // used to block the whole export -- about 30 seconds for 12 places, during
+  // which nothing was downloaded.
   let contentByPlace = new Map<string, PlaceContent>();
-  let writeupByPlace = new Map<string, PlaceWriteup>();
 
   options.signal?.throwIfAborted();
 
-  if (options.detailedWriteups !== false) {
-    try {
-      setStage(options.progress, 'researching', { total: places.length });
-      contentByPlace = await fetchContentForPlaces(places);
+  /** Resolves true once the material for write-ups is in, false if it is not coming. */
+  const research: Promise<boolean> = options.detailedWriteups === false
+    ? Promise.resolve(false)
+    : (async () => {
+      try {
+        setStage(options.progress, 'researching', { total: places.length });
+        contentByPlace = await fetchContentForPlaces(places);
 
-      const extraDocs = options.extraDocs ?? [];
-      for (const place of places) {
-        let content = contentByPlace.get(place.id);
+        const extraDocs = options.extraDocs ?? [];
+        for (const place of places) {
+          let content = contentByPlace.get(place.id);
 
-        if (extraDocs.length > 0) {
-          const excerpts = excerptsForPlace(extraDocs, place.name);
-          if (excerpts.length > 0) {
-            if (!content) {
-              content = { facts: [], sources: [] };
-              contentByPlace.set(place.id, content);
+          if (extraDocs.length > 0) {
+            const excerpts = excerptsForPlace(extraDocs, place.name);
+            if (excerpts.length > 0) {
+              if (!content) {
+                content = { facts: [], sources: [] };
+                contentByPlace.set(place.id, content);
+              }
+              content.extraExtracts = excerpts;
+              content.sources.push(
+                ...excerpts.map((excerpt) => ({ label: excerpt.label, url: excerpt.url })),
+              );
             }
-            content.extraExtracts = excerpts;
-            content.sources.push(
-              ...excerpts.map((excerpt) => ({ label: excerpt.label, url: excerpt.url })),
-            );
           }
+
+          if (content) place.content = content;
         }
 
-        if (content) place.content = content;
+        if (!config.llm.enabled) {
+          notes.push('No LLM configured — PDF write-ups were assembled from the sources directly.');
+        }
+
+        const researched = contentByPlace.size;
+        notes.push(
+          `Researched ${researched} of ${places.length} place(s) against Wikipedia/Wikidata/Wikivoyage.`,
+        );
+        return true;
+      } catch (error) {
+        notes.push(
+          `Detailed write-ups unavailable (${error instanceof Error ? error.message : String(error)}); PDFs use the short summaries.`,
+        );
+        return false;
       }
-
-      setStage(options.progress, 'writing', { total: places.length });
-      const outcome = await generateWriteups(places, contentByPlace);
-      writeupByPlace = outcome.writeups;
-      notes.push(...outcome.notes);
-
-      const researched = contentByPlace.size;
-      notes.push(
-        `Researched ${researched} of ${places.length} place(s) against Wikipedia/Wikidata/Wikivoyage.`,
-      );
-    } catch (error) {
-      notes.push(
-        `Detailed write-ups unavailable (${error instanceof Error ? error.message : String(error)}); PDFs use the short summaries.`,
-      );
-    }
-  }
+    })();
 
   const dedupeFolder = createNameDeduper();
 
@@ -410,9 +423,8 @@ async function buildInto(
     pdfError?: string;
   }
 
-  // Fetch the photos and render the PDF for a place without touching the sink,
-  // so several places can be in flight while the files are still written in
-  // the order the caller gave them.
+  // Fetch the photos, write the article and render the PDF for one place
+  // without touching the sink, so several places can be in flight at once.
   const prepare = async (place: Place): Promise<PreparedPlace> => {
     options.signal?.throwIfAborted();
 
@@ -425,9 +437,18 @@ async function buildInto(
       }
     }
 
-    // A place with no photo is dropped, so do not spend a PDF render on it.
+    // A place with no photo is dropped, so it gets neither a write-up nor a
+    // PDF. Asking the model first used to spend half its time, in one measured
+    // run, on places that were then thrown away.
     if (includeImages && config.requireImages && converted.length === 0) {
       return { place, converted };
+    }
+
+    let writeup: PlaceWriteup | undefined;
+    if (await research) {
+      const result = await generateWriteupFor(place, contentByPlace.get(place.id));
+      writeup = result.writeup;
+      if (result.note) notes.push(result.note);
     }
 
     const embedded: PdfImageAsset[] = converted
@@ -442,7 +463,7 @@ async function buildInto(
           country: input.country,
           keyword: input.keyword,
           generatedAt,
-          writeup: writeupByPlace.get(place.id),
+          writeup,
         },
         embedded,
       );
@@ -457,19 +478,8 @@ async function buildInto(
   };
 
   const lanes = Math.max(1, Math.min(config.archivePlaceConcurrency, places.length || 1));
-  const inFlight: Array<Promise<PreparedPlace>> = [];
-  let started = 0;
-  const startNext = () => {
-    if (started < places.length) inFlight.push(prepare(places[started++]!));
-  };
-  for (let lane = 0; lane < lanes; lane += 1) startNext();
 
-  while (inFlight.length > 0) {
-    options.signal?.throwIfAborted();
-
-    const { place, converted, pdf, pdfError } = await inFlight.shift()!;
-    startNext(); // keep the window full while this one is written
-
+  const writePrepared = async ({ place, converted, pdf, pdfError }: PreparedPlace): Promise<void> => {
     setStage(options.progress, 'packaging', {
       done: packaged,
       total: places.length,
@@ -480,7 +490,7 @@ async function buildInto(
     if (includeImages && config.requireImages && converted.length === 0) {
       withoutPhotos += 1;
       notes.push(`${place.name}: left out of the folder — no photo could be downloaded.`);
-      continue;
+      return;
     }
 
     const safeName = dedupeFolder(sanitizePathSegment(place.name, `place-${place.osmId}`));
@@ -500,6 +510,60 @@ async function buildInto(
     }
 
     exported.push(place);
+  };
+
+  // One place written at a time, so its files land together. Writing is quick
+  // next to fetching and generating, so this queue never holds anything up.
+  let commitChain: Promise<void> = Promise.resolve();
+  const commit = (prepared: PreparedPlace): Promise<void> => {
+    const run = commitChain.then(() => writePrepared(prepared));
+    commitChain = run.catch(() => undefined);
+    return run;
+  };
+
+  // Places are written as they finish, not in list order. In order, one slow
+  // write-up held back every place behind it after they were ready, and while
+  // it waited no new place could start -- the model sat idle behind its own
+  // slowest answer.
+  const queue = [...places];
+  let stopped: unknown;
+  const worker = async (): Promise<void> => {
+    while (stopped === undefined) {
+      const place = queue.shift();
+      if (!place) return;
+      try {
+        options.signal?.throwIfAborted();
+        await commit(await prepare(place));
+      } catch (error) {
+        // Stop every lane, but let each finish what it is writing first.
+        stopped ??= error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: lanes }, worker));
+  if (stopped !== undefined) throw stopped;
+  // Every place may have been dropped for want of photos before asking for it;
+  // its notes still belong in this README, not after it is written.
+  await research;
+
+  // Finishing order is not ranking order; the summary should follow the search.
+  const rank = new Map(places.map((place, index) => [place.id, index]));
+  exported.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+
+  // Photos from an official tourism site are its own, unlike everything else
+  // here; whoever opens the folder should not have to find that in a caption.
+  const officialPhotos = includeImages
+    ? exported.filter((place) => place.images.some((image) => image.source === 'tourism'))
+    : [];
+  if (officialPhotos.length > 0) {
+    const credits = [...new Set(officialPhotos.flatMap((place) => place.images
+      .filter((image) => image.source === 'tourism')
+      .map((image) => image.credit ?? 'the official tourism site')))];
+    notes.push(
+      `${officialPhotos.length} place(s) include photos from the official tourism site (${credits.join(', ')}). `
+        + 'Those photos are all rights reserved: ask the site for permission before publishing or sharing them. '
+        + 'Each one is credited, with the page it came from, in its place\'s PDF.',
+    );
   }
 
   if (options.includeSummary !== false && input.summarySource) {
@@ -534,7 +598,7 @@ async function buildInto(
   await sink.add('README.txt', buildReadme(input, exported.length, generatedAt, notes));
 
   await sink.finish();
-  return sink.written;
+  return { ...sink.written, exportedIds: exported.map((place) => place.id) };
 }
 
 function buildReadme(

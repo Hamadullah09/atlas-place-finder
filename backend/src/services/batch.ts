@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { isCancellation, runCancellable } from '../lib/cancel.js';
@@ -9,13 +9,16 @@ import { sanitizePathSegment } from '../lib/sanitize.js';
 import { writePlacesFolder } from './archive.js';
 import { fetchExtraSources, type ExtraSourceDoc } from './extraSources.js';
 import { crawlTourismSource } from './siteCrawl.js';
+import { countryPages } from './countryPages.js';
+import { PlaceRegistry, type RegistryEntry } from './placeRegistry.js';
 import { createProgress, type SearchProgress } from './progress.js';
 import { runSearch } from './search.js';
+import type { Place, RawPlace, SearchResult } from '../types.js';
 
 /**
  * Sequential batch runner: one CSV upload becomes one job that works through
- * every city/province, searching and exporting a ZIP per region into the
- * user-chosen folder. Regions run strictly one at a time — Overpass, Nominatim
+ * every city/province, searching and writing each region's places as plain
+ * folders into the user-chosen folder. Regions run strictly one at a time — Overpass, Nominatim
  * and a local LLM all punish parallelism.
  */
 
@@ -29,11 +32,20 @@ export interface BatchRow {
   /** Per-row cap from the CSV, when the sheet supplied one. */
   limit?: number;
   placeCount?: number;
-  /** Matches dropped because another region in this run already exported them. */
+  /** Matches left out because they were already exported, in this run or an earlier one. */
   duplicatesSkipped?: number;
   /** Folder the region's places were written into. */
   outputPath?: string;
   error?: string;
+  /** When this region started and finished (ISO). */
+  startedAt?: string;
+  finishedAt?: string;
+  /** Finding places, checking them, looking up photos and reading the tourism site. */
+  searchMs?: number;
+  /** Writing articles, downloading photos and building the folder. */
+  exportMs?: number;
+  /** The region's own work: search plus write-ups, not time spent queued behind another region. */
+  durationMs?: number;
   /** Live stage while this row is in flight; cleared once it settles. */
   progress?: SearchProgress;
 }
@@ -68,11 +80,14 @@ export interface BatchJobInput {
   detailedWriteups?: boolean;
   /** Cap results per region; defaults to the server MAX_RESULTS. */
   limit?: number;
-  /** Re-export regions whose ZIP already exists instead of skipping them. */
+  /** Re-export regions whose folder is already finished instead of skipping them. */
   overwrite?: boolean;
   /** Fallback cap from a "Maximum search" column, for rows without one. */
   sheetMaxSearch?: number;
-  /** Allow the same place to be exported under several regions. */
+  /**
+   * Allow a place to be exported again: under several regions, or when an
+   * earlier run into the same folder already has it.
+   */
   allowDuplicates?: boolean;
   /** Which engine runs the searches: open-source stack (default) or Google. */
   source?: 'osm' | 'google';
@@ -80,6 +95,8 @@ export interface BatchJobInput {
 
 interface ActiveJob {
   job: BatchJob;
+  /** Every place exported into this output folder, by this run or before it. */
+  registry: PlaceRegistry;
   cancelRequested: boolean;
   /** Aborted by cancelBatchJob so the current row stops mid-flight. */
   controller: AbortController;
@@ -178,19 +195,20 @@ export async function startBatchJob(input: BatchJobInput): Promise<BatchJob> {
     startedAt: new Date().toISOString(),
   };
 
-  // Pick up where an interrupted run left off: the place ids it had already
-  // written stay claimed, so resuming does not re-export them.
+  // Everything already exported into this folder -- by an interrupted run of
+  // this job, or by earlier runs with other search terms -- is skipped.
+  const registry = await loadRegistry(input.outputPath);
   const previous = await loadState(input.outputPath);
-  if (previous && previous.attribute === job.attribute) {
-    job.exportedPlaceIds = previous.exportedPlaceIds;
-    if (previous.exportedPlaceIds.length > 0) {
-      job.notes.push(
-        `Resuming: ${previous.exportedPlaceIds.length} place(s) from an earlier run are already exported and will be skipped.`,
-      );
-    }
+  if (previous && previous.attribute === job.attribute) job.exportedPlaceIds = previous.exportedPlaceIds;
+  // Folders written before the registry existed carry only ids; still worth matching on.
+  for (const id of previous?.exportedPlaceIds ?? []) registry.addEntry({ id, names: [] });
+  if (registry.size > 0 && !input.allowDuplicates) {
+    job.notes.push(
+      `${registry.size} place(s) are already exported in this folder and will not be searched for again.`,
+    );
   }
 
-  const active: ActiveJob = { job, cancelRequested: false, controller: new AbortController() };
+  const active: ActiveJob = { job, registry, cancelRequested: false, controller: new AbortController() };
   jobs.set(job.id, active);
   lastInput.set(job.id, input);
   runningJobId = job.id;
@@ -235,36 +253,56 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
   const networkAttempts = new Map<number, number>();
   const MAX_NETWORK_ATTEMPTS = 3;
 
-  for (let index = 0; index < job.rows.length; index += 1) {
-    if (active.cancelRequested) {
-      job.status = 'cancelled';
-      break;
+  /**
+   * Places found for regions still being written. The next region is searched
+   * while the current one is written, so these are held back from it exactly as
+   * if they were already exported -- no place is written twice. A place the
+   * current region then leaves out for want of a photo is not offered to the
+   * next one either; it would only fail the same photo lookup again.
+   */
+  const inFlight = new Map<number, PlaceRegistry>();
+  const alreadyTaken = (place: RawPlace): RegistryEntry | undefined => {
+    const exported = active.registry.match(place);
+    if (exported) return exported;
+    for (const held of inFlight.values()) {
+      const match = held.match(place);
+      if (match) return match;
     }
+    return undefined;
+  };
 
+  interface Searched {
+    index: number;
+    row: BatchRow;
+    targetDir: string;
+    placesDir: string;
+    result: SearchResult;
+    fresh: Place[];
+    regionDocs: ExtraSourceDoc[];
+    rowStart: number;
+  }
+
+  /** A region's search: ready to write, settled without writing, or an error to handle. */
+  type Outcome =
+    | { kind: 'ready'; searched: Searched }
+    | { kind: 'settled' }
+    | { kind: 'error'; error: unknown; rowStart: number };
+
+  /** The region's own work time; falls back to wall time when it failed part-way. */
+  const finishRow = (row: BatchRow, rowStart: number) => {
+    row.finishedAt = new Date().toISOString();
+    const worked = (row.searchMs ?? 0) + (row.exportMs ?? 0);
+    row.durationMs = worked > 0 ? worked : Date.now() - rowStart;
+  };
+
+  /** Finds a region's places and reads its tourism site; nothing is written yet. */
+  const searchRegion = async (index: number): Promise<Outcome> => {
     const row = job.rows[index]!;
-    // Later passes only revisit what is still queued.
-    if (row.status !== 'pending') continue;
-    job.currentIndex = index;
-
-    // Wait out an outage rather than failing every remaining region.
-    if (isOffline()) {
-      job.networkDown = true;
-      while (isOffline() && !active.cancelRequested) {
-        await new Promise((resolve) => setTimeout(resolve, 10_000));
-        await confirmConnectivity(true);
-      }
-      job.networkDown = false;
-      if (active.cancelRequested) {
-        job.status = 'cancelled';
-        break;
-      }
-      job.notes.push(`Connection restored — resuming at ${row.region}.`);
-    }
-
     const countryDir = sanitizePathSegment(row.country, 'Unknown Country');
     const regionDir = sanitizePathSegment(row.region, 'Unknown Region');
     const targetDir = path.join(job.outputPath, countryDir, regionDir);
     const placesDir = path.join(targetDir, attributeSegment);
+
     // README.txt is written last, so a folder that has one is a region that
     // finished. A crash or a power cut leaves a folder without it, and the
     // next pass rebuilds that region rather than mistaking it for done.
@@ -273,13 +311,18 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
       if (finished?.isFile()) {
         row.status = 'skipped';
         row.outputPath = placesDir;
-        continue;
+        return { kind: 'settled' };
       }
     }
 
+    const rowStart = Date.now();
     try {
       row.status = 'searching';
       row.progress = createProgress();
+      row.startedAt = new Date(rowStart).toISOString();
+      row.finishedAt = undefined;
+      row.durationMs = row.searchMs = row.exportMs = undefined;
+      row.error = undefined;
       // Most specific wins: the CSV row, then the sheet, then the job, then
       // the server ceiling.
       const rowLimit = row.limit ?? input.sheetMaxSearch ?? input.limit ?? config.maxResults;
@@ -292,49 +335,76 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
           includeImages: input.includeImages !== false,
           source: input.source ?? 'osm',
         },
-        { signal: active.controller.signal, progress: row.progress },
+        {
+          signal: active.controller.signal,
+          progress: row.progress,
+          // Province rows overlap the city rows beneath them, and a folder is
+          // often run again with another term. Places already exported -- or
+          // found by a region still being written -- are dropped inside the
+          // search, before their photos are looked up, so new places fill this
+          // region's limit instead.
+          exclude: input.allowDuplicates ? undefined : (place) => Boolean(alreadyTaken(place)),
+        },
       ));
 
-      // Province rows overlap the city rows beneath them, so the same place is
-      // otherwise exported (and researched, and photographed) several times.
+      // The Google engine does not take the exclusion, and two results of one
+      // search can still be one place under two ids; catch both here.
+      const seenHere = new PlaceRegistry();
+      const repeats: RegistryEntry[] = [];
       const fresh = input.allowDuplicates
         ? result.places
-        : result.places.filter((place) => !job.exportedPlaceIds.includes(place.id));
-      const duplicates = result.places.length - fresh.length;
+        : result.places.filter((place) => {
+          const earlier = alreadyTaken(place) ?? seenHere.match(place);
+          if (earlier) {
+            repeats.push(earlier);
+            return false;
+          }
+          seenHere.add(place);
+          return true;
+        });
+      const duplicates = (result.stats.alreadyExported ?? 0) + repeats.length;
       if (duplicates > 0) {
         row.duplicatesSkipped = duplicates;
+        const where = repeats.find((entry) => entry.where)?.where;
         job.notes.push(
-          `${row.region}: skipped ${duplicates} place(s) already exported for another region in this run.`,
+          `${row.region}: skipped ${duplicates} place(s) already exported${where ? ` (for example in ${where})` : ''}.`,
         );
       }
 
       row.placeCount = fresh.length;
       if (fresh.length === 0) {
         row.status = 'done';
+        row.progress = undefined;
         job.notes.push(
           duplicates > 0
             ? `${row.region}: every match was already exported elsewhere; nothing new to write.`
             : `${row.region}: no matching places found; nothing exported.`,
         );
+        row.searchMs = Date.now() - rowStart;
+        finishRow(row, rowStart);
         await saveState(job);
-        continue;
-      }
-
-      if (active.cancelRequested) {
-        job.status = 'cancelled';
-        break;
+        return { kind: 'settled' };
       }
 
       // The country's own tourism site, read a few pages deep for this region.
       // It is the one source that knows the official name and the local detail
       // Wikipedia often lacks, so it is worth a handful of requests per region.
       let regionDocs = extraDocs;
+      // The country's Wikivoyage guide and Wikipedia article, read once per
+      // country and mined for each place's name like the pages below.
+      const pages = await runCancellable(active.controller.signal, () =>
+        countryPages(result.area.countryCode, result.area.country),
+      );
+      if (pages.docs.length > 0) {
+        regionDocs = [...regionDocs, ...pages.docs];
+        job.notes.push(`${row.region}: using ${pages.docs.map((doc) => doc.label).join(' and ')}.`);
+      }
       if (config.crawl.tourismSources) {
         const official = await runCancellable(active.controller.signal, () =>
           crawlTourismSource(result.area.countryCode, row.region),
         );
         if (official.docs.length > 0) {
-          regionDocs = [...extraDocs, ...official.docs];
+          regionDocs = [...regionDocs, ...official.docs];
           job.notes.push(
             `${row.region}: read ${official.docs.length} page(s) from ${official.source?.organisation ?? 'the official tourism site'}.`,
           );
@@ -343,7 +413,24 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
         }
       }
 
-      row.status = 'exporting';
+      row.searchMs = Date.now() - rowStart;
+      if (!input.allowDuplicates) {
+        const held = new PlaceRegistry();
+        for (const place of fresh) held.add(place, 'a region still being written');
+        inFlight.set(index, held);
+      }
+      return { kind: 'ready', searched: { index, row, targetDir, placesDir, result, fresh, regionDocs, rowStart } };
+    } catch (error) {
+      return { kind: 'error', error, rowStart };
+    }
+  };
+
+  /** Writes a searched region's places into its folder. */
+  const exportRegion = async (searched: Searched): Promise<void> => {
+    const { index, row, targetDir, placesDir, result, fresh, regionDocs, rowStart } = searched;
+    row.status = 'exporting';
+    const exportStart = Date.now();
+    try {
       await ensureWritableDirectory(targetDir);
 
       const written = await runCancellable(active.controller.signal, () => writePlacesFolder(placesDir, {
@@ -363,43 +450,160 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
       // The Country/Region folders are already in this path.
       }, { nest: false }));
 
-      job.exportedPlaceIds.push(...fresh.map((place) => place.id));
+      // Only what reached the folder: a place left out for want of a photo was
+      // not exported, and must not be skipped as if it had been.
+      const exported = new Set(written.exportedIds);
+      const where = path.relative(job.outputPath, placesDir) || '.';
+      for (const place of fresh) {
+        if (!exported.has(place.id)) continue;
+        active.registry.add(place, where);
+        job.exportedPlaceIds.push(place.id);
+      }
       row.status = 'done';
       row.outputPath = written.path;
       row.progress = undefined;
+      row.exportMs = Date.now() - exportStart;
+      finishRow(row, rowStart);
       await saveState(job);
+      await saveRegistry(job.outputPath, active.registry);
     } catch (error) {
-      if (active.cancelRequested || isCancellation(error)) {
+      row.exportMs = Date.now() - exportStart;
+      throw error;
+    } finally {
+      inFlight.delete(index);
+    }
+  };
+
+  /** What to do after a region failed: stop the job, retry the region, or move on. */
+  const handleFailure = (index: number, error: unknown, rowStart: number): 'stop' | 'retry' | 'next' => {
+    const row = job.rows[index]!;
+    inFlight.delete(index);
+    if (active.cancelRequested || isCancellation(error)) {
+      row.status = 'pending';
+      row.progress = undefined;
+      job.status = 'cancelled';
+      job.notes.push(`${row.region}, ${row.country}: stopped part-way; nothing was written.`);
+      return 'stop';
+    }
+
+    // Lost the link part-way: leave the region queued and try it again
+    // on the next pass rather than recording a failure that never was.
+    if (isOffline()) {
+      const spent = (networkAttempts.get(index) ?? 0) + 1;
+      networkAttempts.set(index, spent);
+
+      if (spent <= MAX_NETWORK_ATTEMPTS) {
         row.status = 'pending';
-        job.status = 'cancelled';
-        job.notes.push(`${row.region}, ${row.country}: stopped part-way; nothing was written.`);
-        break;
-      }
-
-      // Lost the link part-way: leave the region queued and try it again
-      // on the next pass rather than recording a failure that never was.
-      if (isOffline()) {
-        const spent = (networkAttempts.get(index) ?? 0) + 1;
-        networkAttempts.set(index, spent);
-
-        if (spent <= MAX_NETWORK_ATTEMPTS) {
-          row.status = 'pending';
-          row.progress = undefined;
-          job.notes.push(
-            `${row.region}, ${row.country}: interrupted by the connection dropping; still queued.`,
-          );
-          index -= 1;
-          continue;
-        }
-
+        row.progress = undefined;
         job.notes.push(
-          `${row.region}, ${row.country}: gave up after ${MAX_NETWORK_ATTEMPTS} attempts on an unstable connection.`,
+          `${row.region}, ${row.country}: interrupted by the connection dropping; still queued.`,
         );
+        return 'retry';
       }
 
-      row.status = 'failed';
-      row.error = error instanceof Error ? error.message : String(error);
-      job.notes.push(`${row.region}, ${row.country}: ${row.error}`);
+      job.notes.push(
+        `${row.region}, ${row.country}: gave up after ${MAX_NETWORK_ATTEMPTS} attempts on an unstable connection.`,
+      );
+    }
+
+    row.status = 'failed';
+    row.progress = undefined;
+    finishRow(row, rowStart);
+    row.error = error instanceof Error ? error.message : String(error);
+    job.notes.push(`${row.region}, ${row.country}: ${row.error}`);
+    return 'next';
+  };
+
+  /** The next region still queued at or after `from`, or -1. */
+  const nextQueued = (from: number): number => {
+    for (let i = from; i < job.rows.length; i += 1) if (job.rows[i]!.status === 'pending') return i;
+    return -1;
+  };
+
+  /**
+   * The region being searched while another is written. Searching (finding,
+   * checking, photo lookup) waits on the network; writing waits on the model.
+   * Run one after the other they left each idle in turn -- about 40% of a
+   * measured China batch went on searching while the model sat unused.
+   */
+  let ahead: { index: number; work: Promise<Outcome> } | null = null;
+
+  for (let index = 0; index < job.rows.length; index += 1) {
+    if (active.cancelRequested) {
+      job.status = 'cancelled';
+      break;
+    }
+
+    const row = job.rows[index]!;
+    let outcome: Outcome;
+    if (ahead && ahead.index === index) {
+      outcome = await ahead.work;
+      ahead = null;
+    } else {
+      // Later passes only revisit what is still queued.
+      if (row.status !== 'pending') continue;
+      job.currentIndex = index;
+
+      // Wait out an outage rather than failing every remaining region.
+      if (isOffline()) {
+        job.networkDown = true;
+        while (isOffline() && !active.cancelRequested) {
+          await new Promise((resolve) => setTimeout(resolve, 10_000));
+          await confirmConnectivity(true);
+        }
+        job.networkDown = false;
+        if (active.cancelRequested) {
+          job.status = 'cancelled';
+          break;
+        }
+        job.notes.push(`Connection restored — resuming at ${row.region}.`);
+      }
+
+      outcome = await searchRegion(index);
+    }
+    job.currentIndex = index;
+
+    if (outcome.kind === 'settled') continue;
+    if (outcome.kind === 'error') {
+      const next = handleFailure(index, outcome.error, outcome.rowStart);
+      if (next === 'stop') break;
+      if (next === 'retry') index -= 1;
+      continue;
+    }
+
+    if (active.cancelRequested) {
+      handleFailure(index, new Error('cancelled'), outcome.searched.rowStart);
+      break;
+    }
+
+    // While this region is written, the next queued one is searched.
+    const following = nextQueued(index + 1);
+    if (!ahead && following !== -1 && !isOffline()) {
+      ahead = { index: following, work: searchRegion(following) };
+    }
+
+    try {
+      await exportRegion(outcome.searched);
+    } catch (error) {
+      const next = handleFailure(index, error, outcome.searched.rowStart);
+      if (next === 'stop') break;
+      if (next === 'retry') index -= 1;
+    }
+  }
+
+  // A region searched ahead and never written -- the job was cancelled or
+  // stopped -- goes back in the queue, so a retry picks it up.
+  if (ahead) {
+    const leftover = ahead;
+    ahead = null;
+    const outcome = await leftover.work.catch((error: unknown) => ({ kind: 'error' as const, error, rowStart: Date.now() }));
+    const row = job.rows[leftover.index]!;
+    inFlight.delete(leftover.index);
+    if (outcome.kind !== 'settled') {
+      row.status = 'pending';
+      row.progress = undefined;
+      row.startedAt = row.finishedAt = undefined;
+      row.durationMs = row.searchMs = row.exportMs = undefined;
     }
   }
 
@@ -419,6 +623,41 @@ async function runJob(active: ActiveJob, input: BatchJobInput): Promise<void> {
 }
 
 const STATE_FILE = '_batch-state.json';
+
+/**
+ * Every place exported into this folder, with enough to recognise it again
+ * under another id or name. Kept beside the exports so it travels with them,
+ * and read by every batch that writes into the same folder.
+ */
+const REGISTRY_FILE = '_batch-places.json';
+
+interface PersistedRegistry {
+  version: 1;
+  updatedAt: string;
+  places: RegistryEntry[];
+}
+
+async function loadRegistry(outputPath: string): Promise<PlaceRegistry> {
+  try {
+    const parsed = JSON.parse(await readFile(path.join(outputPath, REGISTRY_FILE), 'utf8')) as PersistedRegistry;
+    return PlaceRegistry.from(Array.isArray(parsed.places) ? parsed.places : []);
+  } catch {
+    return new PlaceRegistry();
+  }
+}
+
+/** Written to a temporary name and renamed, so a crash never leaves half a file. */
+async function saveRegistry(outputPath: string, registry: PlaceRegistry): Promise<void> {
+  const state: PersistedRegistry = { version: 1, updatedAt: new Date().toISOString(), places: registry.toJSON() };
+  const target = path.join(outputPath, REGISTRY_FILE);
+  const temporary = `${target}.tmp`;
+  try {
+    await writeFile(temporary, JSON.stringify(state), 'utf8');
+    await rename(temporary, target);
+  } catch {
+    // Losing the registry costs a duplicate later, never an export now.
+  }
+}
 
 interface PersistedState {
   attribute: string;
@@ -451,6 +690,26 @@ async function loadState(outputPath: string): Promise<PersistedState | null> {
   }
 }
 
+/** 45 s · 7 min 30 s · 1 h 05 min */
+export function formatDuration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ${String(seconds % 60).padStart(2, '0')} s`;
+  return `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')} min`;
+}
+
+/** Total time of the run and the places per hour it works out to. */
+function runTimeLines(job: BatchJob): string[] {
+  if (!job.finishedAt) return [];
+  const elapsed = Date.parse(job.finishedAt) - Date.parse(job.startedAt);
+  if (!(elapsed > 0)) return [];
+  const places = job.rows.reduce((sum, row) => sum + (row.status === 'done' ? row.placeCount ?? 0 : 0), 0);
+  const lines = [`Total time  : ${formatDuration(elapsed)}`];
+  if (places > 0) lines.push(`Speed       : about ${Math.round(places / (elapsed / 3_600_000))} places/hour (${places} places)`);
+  return lines;
+}
+
 /** Plain-text run report dropped next to the exports for later reference. */
 async function writeReport(job: BatchJob): Promise<void> {
   const lines = [
@@ -462,6 +721,7 @@ async function writeReport(job: BatchJob): Promise<void> {
     `Started     : ${job.startedAt}`,
     `Finished    : ${job.finishedAt ?? ''}`,
     `Status      : ${job.status}`,
+    ...runTimeLines(job),
     '',
     ...job.rows.map((row) => {
       const detail = row.error
@@ -469,8 +729,15 @@ async function writeReport(job: BatchJob): Promise<void> {
           ? 'already exported'
           : `${row.placeCount ?? 0} place(s)`
             + (row.duplicatesSkipped ? `, ${row.duplicatesSkipped} duplicate(s) skipped` : ''));
-      return `${row.status.padEnd(9)} ${row.region}, ${row.country} — ${detail}`;
+      const took = row.durationMs === undefined
+        ? ''
+        : ` — ${formatDuration(row.durationMs)}`
+          + ` (search ${formatDuration(row.searchMs ?? 0)}, write-ups & photos ${formatDuration(row.exportMs ?? 0)})`;
+      return `${row.status.padEnd(9)} ${row.region}, ${row.country} — ${detail}${took}`;
     }),
+    '',
+    'Regions overlap: the next one is searched while the current one is written,',
+    'so the times per region add up to more than the total time.',
     '',
     `Unique places exported: ${job.exportedPlaceIds.length}`,
   ];

@@ -49,3 +49,32 @@ export function chunk<T>(items: readonly T[], size: number): T[][] {
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
   return out;
 }
+
+/**
+ * A shared cap on how many tasks run at once, for when the callers are spread
+ * across the program rather than gathered into one list. Each call to the
+ * returned function waits for a free slot, runs, and frees it however the
+ * task ends. `max` is read on every call, so a changed setting takes effect.
+ */
+export function createLimiter(max: () => number): <T>(task: () => Promise<T>) => Promise<T> {
+  let active = 0;
+  const waiting: Array<() => void> = [];
+
+  const release = () => {
+    active -= 1;
+    const next = waiting.shift();
+    if (next) next();
+  };
+
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active >= Math.max(1, max())) {
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+    active += 1;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  };
+}

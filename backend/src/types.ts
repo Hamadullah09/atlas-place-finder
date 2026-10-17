@@ -28,7 +28,9 @@ export type ImageSource =
   | 'openverse'
   | 'unsplash'
   | 'google'
-  | 'brave';
+  | 'brave'
+  /** The country's official tourism site: all rights reserved, credited to it. */
+  | 'tourism';
 
 /** A labelled fact lifted from a Wikidata statement. */
 export interface WikidataFact {
@@ -85,6 +87,8 @@ export interface PlaceImage {
   license?: string;
   /** Human-facing page the image came from, for attribution. */
   sourcePage?: string;
+  /** Title, description and categories, used inside the lookup only to check relevance. */
+  about?: string;
 }
 
 export type PlaceSource = 'overpass' | 'wikidata' | 'nominatim' | 'google';
@@ -161,6 +165,8 @@ export interface SearchStats {
   llmModel?: string;
   elapsedMs: number;
   warnings: string[];
+  /** Places a batch left out because they were exported earlier. */
+  alreadyExported?: number;
 }
 
 export interface SourceLink {
