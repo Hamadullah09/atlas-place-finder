@@ -207,7 +207,7 @@ export async function commonsGeoSearch<TInfo>(
     generator: 'geosearch',
     ggscoord: `${place.lat}|${place.lon}`,
     ggsradius: Math.min(Math.round(config.images.geoRadiusKm * 1000), 10_000),
-    ggslimit: Math.min(limit * 3, 30),
+    ggslimit: Math.min(limit * 3, 50),
     ggsnamespace: 6, // File:
     prop: 'imageinfo',
     iiprop: 'url|size|mime|extmetadata',

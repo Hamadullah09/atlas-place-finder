@@ -97,8 +97,12 @@ export function buildOverpassQuery(
   const useArea = typeof area.areaId === 'number';
 
   const scope = useArea ? '(area.searchArea)' : '';
+  // Named places only. Unnamed ones are dropped below anyway, and the result
+  // limit counts them: for parks in Barcelona, all 150 elements Overpass
+  // returned were unnamed playgrounds, so the search got one named park out
+  // of hundreds and leaned entirely on Wikidata and Nominatim.
   const statements = mergeSelectors(resolved.selectors)
-    .map((selector) => `  nwr${selector}${scope};`)
+    .map((selector) => `  nwr${selector}["name"]${scope};`)
     .join('\n');
 
   const header = useArea

@@ -87,6 +87,8 @@ export interface PlaceImage {
   license?: string;
   /** Human-facing page the image came from, for attribution. */
   sourcePage?: string;
+  /** Title, description and categories, used inside the lookup only to check relevance. */
+  about?: string;
 }
 
 export type PlaceSource = 'overpass' | 'wikidata' | 'nominatim' | 'google';

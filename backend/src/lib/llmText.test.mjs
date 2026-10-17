@@ -44,7 +44,7 @@ test('empty input is safe', () => {
 
 test('switches thinking off for reasoning models only', async () => {
   const { noThinkingFields, noThinkingPrompt } = await import('./llmText.ts');
-  assert.deepEqual(noThinkingFields('qwen3:8b'), { think: false, chat_template_kwargs: { enable_thinking: false } });
+  assert.deepEqual(noThinkingFields('qwen3:8b'), { think: false, reasoning_effort: 'none', chat_template_kwargs: { enable_thinking: false } });
   assert.equal(noThinkingPrompt('qwen3:8b', 'Be brief.'), 'Be brief.\n\n/no_think');
   assert.deepEqual(noThinkingFields('qwen2.5:7b'), {});
   assert.equal(noThinkingPrompt('qwen2.5:7b', 'Be brief.'), 'Be brief.');

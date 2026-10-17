@@ -451,6 +451,10 @@ async function callLlm(place: Place, content: PlaceContent | undefined): Promise
         // Thinking would burn the token budget, truncate the article mid-JSON and
         // drop the place to the fallback text.
         ...noThinkingFields(config.llm.model),
+        // No response_format: JSON mode was tried against qwen3:8b on Ollama
+        // and it answered {"error": "Invalid request"} instead of an article.
+        // When the model writes formatted text instead of JSON, the article
+        // is kept by sectionsFromProse below.
         messages: [
           {
             role: 'system',
@@ -474,21 +478,27 @@ async function callLlm(place: Place, content: PlaceContent | undefined): Promise
   if (!raw) return null;
 
   const parsed = parseJsonObject(raw);
-  if (!parsed) return null;
+  const validated = parsed ? writeupSchema.safeParse(parsed) : null;
 
-  const validated = writeupSchema.safeParse(parsed);
-  if (!validated.success) return null;
-
-  const raw2 = validated.data;
-  const data = {
-    overview: toProse(raw2.overview),
-    history: toProse(raw2.history),
-    architecture: toProse(raw2.architecture),
-    context: toProse(raw2.context),
-    highlights: toBulletList(raw2.highlights).slice(0, 8),
-    visiting: toProse(raw2.visiting),
-    practical: toProse(raw2.practical),
-  };
+  let data: WriteupSections;
+  if (validated?.success) {
+    const raw2 = validated.data;
+    data = {
+      overview: toProse(raw2.overview),
+      history: toProse(raw2.history),
+      architecture: toProse(raw2.architecture),
+      context: toProse(raw2.context),
+      highlights: toBulletList(raw2.highlights).slice(0, 8),
+      visiting: toProse(raw2.visiting),
+      practical: toProse(raw2.practical),
+    };
+  } else {
+    // A server that ignores JSON mode can still return a perfectly good
+    // article as formatted text. Keep it rather than throw it away.
+    const salvaged = sectionsFromProse(cleanCompletion(raw));
+    if (!salvaged) return null;
+    data = salvaged;
+  }
   const redactions: string[] = [];
 
   // Same guard as the short summaries: strip any opening-hours claim the
@@ -523,8 +533,77 @@ async function callLlm(place: Place, content: PlaceContent | undefined): Promise
   return writeup;
 }
 
+interface WriteupSections {
+  overview: string;
+  history: string;
+  architecture: string;
+  context: string;
+  highlights: string[];
+  visiting: string;
+  practical: string;
+}
+
+type SectionKey = keyof WriteupSections;
+
+/** Which section a heading such as "## Architecture and Layout" belongs to. */
+const SECTION_HEADINGS: Array<[SectionKey, RegExp]> = [
+  ['history', /histor|origin|background|timeline/i],
+  ['architecture', /architect|design|layout|building|structure/i],
+  ['context', /significan|cultur|importance|legacy|context|role/i],
+  ['highlights', /highlight|what to see|must.see|attraction|feature/i],
+  ['practical', /practical|tips|ticket|hours|opening|admission|information/i],
+  ['visiting', /visit|getting there|access|experience/i],
+  ['overview', /overview|introduction|about/i],
+];
+
+/** Markdown emphasis, heading marks and list bullets, removed. */
+function plainLine(line: string): string {
+  return line
+    .replace(/\*\*|__|\x60/g, '')
+    .replace(/^#+\s*/, '')
+    .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')
+    .trim();
+}
+
+/**
+ * An article written as formatted text, sorted into sections by its headings;
+ * text before any heading, or under one that matches nothing, is overview.
+ * Needs real substance -- a few hundred characters -- or it is not used.
+ */
+function sectionsFromProse(text: string): WriteupSections | null {
+  if (text.replace(/\s+/g, ' ').trim().length < 400) return null;
+  const lines: Record<SectionKey, string[]> = {
+    overview: [], history: [], architecture: [], context: [], highlights: [], visiting: [], practical: [],
+  };
+  let current: SectionKey = 'overview';
+  for (const line of text.split(/\r?\n/)) {
+    const heading = /^\s*(?:#{1,6}\s+(.+?)\s*$|\*\*([^*]{2,80})\*\*:?\s*$)/.exec(line);
+    if (heading) {
+      const title = heading[1] ?? heading[2] ?? '';
+      current = SECTION_HEADINGS.find(([, pattern]) => pattern.test(title))?.[0] ?? current;
+      continue;
+    }
+    lines[current].push(line.trim() ? plainLine(line) : '');
+  }
+  const prose = (key: SectionKey) => lines[key]
+    .join('\n')
+    .split(/\n{2,}/)
+    .map((part) => part.replace(/\n/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  return {
+    overview: prose('overview'),
+    history: prose('history'),
+    architecture: prose('architecture'),
+    context: prose('context'),
+    highlights: lines.highlights.filter((line) => line.length > 2).slice(0, 8),
+    visiting: prose('visiting'),
+    practical: prose('practical'),
+  };
+}
+
 /** Internals exposed for unit tests only — not part of the service contract. */
-export const __testing = { parseJsonObject, toProse, toBulletList, stripJsonComments };
+export const __testing = { parseJsonObject, toProse, toBulletList, stripJsonComments, sectionsFromProse };
 
 export interface WriteupOutcome {
   writeups: Map<string, PlaceWriteup>;

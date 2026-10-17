@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { mapLimitSettled, chunk } from '../lib/concurrency.js';
 import { fetchJson, HttpError, qs } from '../lib/http.js';
+import { describesPlace } from '../lib/nameMatch.js';
 import { tourismImagesForPlace } from './tourismImages.js';
 import { cleanText } from '../lib/sanitize.js';
 import { commonsGeoSearch, europeanaSearch, braveImageSearch, flickrGeoSearch } from './imageSources.js';
@@ -265,6 +266,12 @@ function scaledOrOriginal(url: string, width: number | undefined): string {
   return deriveCommonsThumb(url, SERVE_WIDTH) ?? url;
 }
 
+/** Sources not tied to the place by an explicit link: their photos must name it. */
+const UNLINKED_SOURCES = new Set<PlaceImage['source']>(['commons-geo', 'commons', 'openverse', 'flickr', 'europeana']);
+
+/** The map's names for a place, in every language that tends to appear in photo titles. */
+const NAME_TAGS = ['name', 'name:en', 'name:zh', 'name:zh-Hans', 'name:zh-Hant', 'name:ja', 'name:ko', 'official_name', 'alt_name', 'int_name'];
+
 function toPlaceImage(info: CommonsImageInfo, source: PlaceImage['source'], title?: string): PlaceImage | null {
   if (info.mime && !ALLOWED_MIME.has(info.mime)) return null;
   if (!info.url) return null;
@@ -288,6 +295,14 @@ function toPlaceImage(info: CommonsImageInfo, source: PlaceImage['source'], titl
     credit: stripHtml(info.extmetadata?.Artist?.value) || stripHtml(info.extmetadata?.Credit?.value) || undefined,
     license: stripHtml(info.extmetadata?.LicenseShortName?.value) || undefined,
     sourcePage: info.descriptionurl,
+    // What the photo says it shows, for the relevance check on photos found
+    // by position or search; removed before results leave the lookup.
+    about: [
+      title,
+      stripHtml(info.extmetadata?.ObjectName?.value),
+      stripHtml(info.extmetadata?.ImageDescription?.value),
+      stripHtml(info.extmetadata?.Categories?.value),
+    ].filter(Boolean).join(' | ').slice(0, 1500) || undefined,
   };
 }
 
@@ -895,6 +910,16 @@ export async function fetchImagesForPlaces(
     const localName = place.tags['name:local'];
     const searchNames = [...new Set([place.name, localName].filter(Boolean))] as string[];
 
+    // A photo found by position or by a loose search is kept only when its own
+    // title, description or categories name the place. Without this, a Shenzhen
+    // batch filled museum folders with nearby cars, shops and metro platforms.
+    const placeNames = [...new Set([
+      ...searchNames,
+      ...NAME_TAGS.flatMap((tag) => (place.tags[tag] ?? '').split(';')),
+    ].map((name) => name.trim()).filter(Boolean))];
+    const aboutPlace = (images: PlaceImage[]) => images.filter((image) => !UNLINKED_SOURCES.has(image.source)
+      || describesPlace(image.about ?? image.title ?? '', placeNames, options.city));
+
     // 4b-6. The independent archives, asked together rather than in turn.
     //
     // These share no state and none can answer for another, so waiting for each
@@ -915,7 +940,9 @@ export async function fetchImagesForPlaces(
         // tower is only at these coordinates.
         commonsGeoSearch(
           place,
-          wanted,
+          // Most nearby photos are of something else and are dropped below,
+          // so ask for more than are wanted.
+          Math.min(wanted * 4, 40),
           commonsApi,
           toPlaceImage,
           (limit) => commonsFilesViaGateway(
@@ -941,7 +968,7 @@ export async function fetchImagesForPlaces(
       }
 
       for (const outcome of await Promise.allSettled(lookups)) {
-        if (outcome.status === 'fulfilled') collected.push(...outcome.value);
+        if (outcome.status === 'fulfilled') collected.push(...aboutPlace(outcome.value));
       }
     }
 
@@ -975,6 +1002,9 @@ export async function fetchImagesForPlaces(
   });
 
   // --- Rank and trim ------------------------------------------------------
+  for (const images of result.values()) {
+    for (const image of images) delete image.about;
+  }
   for (const [placeId, images] of result) {
     const eligible = config.requireImages ? images.filter(isHdImage) : images;
     if (eligible.length === 0) {
