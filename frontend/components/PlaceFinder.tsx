@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Image from 'next/image';
 import BatchPanel from '@/components/BatchPanel';
 import MapView from '@/components/MapView';
 import ResultsPanel from '@/components/ResultsPanel';
@@ -8,6 +9,7 @@ import SearchForm, { type SearchFormValues } from '@/components/SearchForm';
 import HeroSearch from '@/components/HeroSearch';
 import SearchProgressView from '@/components/SearchProgress';
 import { downloadArchive, NetworkError, searchPlaces, type SearchProgress } from '@/lib/api';
+import { formatDuration, shortPath } from '@/lib/format';
 import type { Place, SearchResult } from '@/lib/types';
 
 const DEFAULT_VALUES: SearchFormValues = {
@@ -38,6 +40,10 @@ export default function PlaceFinder() {
   const [progress, setProgress] = useState<SearchProgress | null>(null);
   const [startedAt, setStartedAt] = useState(0);
   const [formValues, setFormValues] = useState<SearchFormValues>(DEFAULT_VALUES);
+  /** How long the last full save took, shown beside the search time. */
+  const [exportTiming, setExportTiming] = useState<{ searchId: string; ms: number } | null>(null);
+  /** The full form is open over the results (otherwise it is one summary line). */
+  const [editing, setEditing] = useState(false);
 
   const searchAbort = useRef<AbortController | null>(null);
   const downloadAbort = useRef<AbortController | null>(null);
@@ -62,6 +68,7 @@ export default function PlaceFinder() {
     searchAbort.current = controller;
 
     setLoading(true);
+    setEditing(false);
     setError(null);
     setSelectedId(null);
     setProgress(null);
@@ -151,6 +158,7 @@ export default function PlaceFinder() {
           return;
         }
 
+        const exportStart = Date.now();
         const outcome = await downloadArchive(
           {
             searchId: result.searchId,
@@ -160,10 +168,12 @@ export default function PlaceFinder() {
           `${result.query.keyword}-${result.area.city}.zip`,
           controller.signal,
         );
+        const exportMs = Date.now() - exportStart;
+        if (!placeIds) setExportTiming({ searchId: result.searchId, ms: exportMs });
         setToast({
           tone: 'info',
           message: outcome.kind === 'saved'
-            ? `Saved to ${outcome.path}`
+            ? `Saved to ${outcome.path ? shortPath(outcome.path) : 'your folder'} in ${formatDuration(exportMs)}`
             : `Downloaded ${outcome.filename}`,
         });
       } catch (caught) {
@@ -211,28 +221,55 @@ export default function PlaceFinder() {
 
   const content = (
     <>
-      {/* Mode bar — sits directly under the app header */}
-      <div className="flex shrink-0 items-center gap-1 border-b border-slate-200 bg-ink-950/60 px-4 py-1.5 backdrop-blur-xl sm:px-5">
-        {(
-          [
-            { id: 'single', label: 'Single search' },
-            { id: 'batch', label: 'Batch search' },
-          ] as const
-        ).map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => setMode(tab.id)}
-            className={`rounded-lg px-3.5 py-1.5 text-[17px] font-semibold transition ${
-              mode === tab.id
-                ? 'bg-aqua-500/15 text-aqua-300'
-                : 'text-mist-400 hover:bg-slate-50 hover:text-mist-200'
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {/* The nav bar: the name on the left, Single / Batch on the right. On a
+          phone there is no room for both on one line, so the switch takes a
+          full-width second row of the same bar. */}
+      <header className="shrink-0 bg-white">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-3 sm:h-[76px] sm:flex-nowrap sm:px-6 sm:py-0">
+          <a href="/" className="flex min-w-0 items-center gap-3">
+            <Image
+              src="/logo.png"
+              alt=""
+              width={52}
+              height={52}
+              priority
+              // A 61 KB file shown at one size: served as is, so the header
+              // never waits on the image optimiser for a new width.
+              unoptimized
+              className="h-10 w-10 shrink-0 object-contain sm:h-[52px] sm:w-[52px]"
+            />
+            <span className="truncate whitespace-nowrap text-[23px] font-bold leading-none tracking-tight text-black sm:text-[28px]">
+              SMA Place Finder
+            </span>
+          </a>
+
+        <div role="tablist" aria-label="Search mode" className="flex w-full rounded-xl bg-slate-100 p-1 sm:ml-auto sm:w-auto">
+          {(
+            [
+              { id: 'single', label: 'Single search' },
+              { id: 'batch', label: 'Batch search' },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={mode === tab.id}
+              onClick={() => setMode(tab.id)}
+              className={`flex-1 whitespace-nowrap rounded-lg px-4 py-2 text-[18px] font-semibold transition sm:px-5 ${
+                mode === tab.id
+                  ? 'bg-teal-700 text-white shadow-sm'
+                  : 'text-mist-300 hover:text-mist-50'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        </div>
+        {/* A thin accent line under the bar. */}
+        <div aria-hidden className="h-[3px] bg-teal-600" />
+      </header>
 
       {showBatch ? (
         <div className="flex min-h-0 flex-1 overflow-y-auto scroll-region px-4 py-6">
@@ -262,23 +299,44 @@ export default function PlaceFinder() {
       ) : (
       <div className="relative flex min-h-0 flex-1 flex-col lg:block">
       {/* Map — in flow on small screens, full-bleed canvas on large */}
-      <div className="relative order-1 h-[38vh] shrink-0 border-b border-slate-200 lg:absolute lg:inset-0 lg:h-auto lg:border-0">
+      <div className="relative order-1 h-[28vh] shrink-0 border-b sm:h-[38vh] border-slate-200 lg:absolute lg:inset-0 lg:h-auto lg:border-0">
         <MapView places={result?.places ?? []} area={result?.area ?? null} />
       </div>
 
       {/* Control panel — floats over the map on large screens */}
-      <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[440px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-slate-900/10 lg:glass">
+      <div className="order-2 flex min-h-0 flex-1 flex-col gap-3 p-3 lg:absolute lg:bottom-3 lg:left-3 lg:top-3 lg:z-20 lg:w-[520px] lg:flex-none lg:rounded-2xl lg:p-3.5 lg:shadow-2xl lg:shadow-slate-900/10 lg:glass">
         {(
           <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto scroll-region pr-0.5">
+            {/* Once there are results the form folds to one line, so the
+                results are what fills the screen, especially on a phone. */}
             <div className="shrink-0">
-              <SearchForm
-                initialValues={DEFAULT_VALUES}
-                values={formValues}
-                sources={result?.sources}
-                loading={loading}
-                onSearch={handleSearch}
-                onCancel={handleCancelSearch}
-              />
+              {editing || (!loading && !result) ? (
+                <div className="space-y-2">
+                  {result && !loading && (
+                    <button
+                      type="button"
+                      onClick={() => setEditing(false)}
+                      className="text-[17px] font-semibold text-aqua-300 hover:underline"
+                    >
+                      ← Back to results
+                    </button>
+                  )}
+                  <SearchForm
+                    initialValues={DEFAULT_VALUES}
+                    values={formValues}
+                    sources={result?.sources}
+                    loading={loading}
+                    onSearch={handleSearch}
+                    onCancel={handleCancelSearch}
+                  />
+                </div>
+              ) : (
+                <SearchSummary
+                  values={formValues}
+                  disabled={loading}
+                  onEdit={() => setEditing(true)}
+                />
+              )}
             </div>
 
             {/* One of: live progress, an error, or results. The first-run case
@@ -295,12 +353,12 @@ export default function PlaceFinder() {
 
             {!loading && error && (
               <div className="shrink-0 rounded-2xl border border-red-500/25 bg-red-500/10 p-3.5">
-                <p className="text-[17px] font-semibold text-red-700">Search failed</p>
-                <p className="mt-1 text-[16px] leading-relaxed text-mist-300">{error}</p>
+                <p className="text-[20px] font-semibold text-red-700">Search failed</p>
+                <p className="mt-1 text-[19px] leading-relaxed text-mist-300">{error}</p>
                 <button
                   type="button"
                   onClick={() => void handleSearch(formValues)}
-                  className="mt-2.5 rounded-xl border border-red-500/30 px-3.5 py-1.5 text-[15.5px] font-semibold text-red-700 transition hover:bg-red-500/10"
+                  className="mt-2.5 rounded-xl border border-red-500/30 px-3.5 py-1.5 text-[18px] font-semibold text-red-700 transition hover:bg-red-500/10"
                 >
                   Retry search
                 </button>
@@ -321,6 +379,7 @@ export default function PlaceFinder() {
                   onDownloadAll={handleDownloadAll}
                   onAddSuggestion={handleAddSuggestion}
                   savePath={formValues.downloadPath.trim() || undefined}
+                  exportMs={exportTiming && result && exportTiming.searchId === result.searchId ? exportTiming.ms : undefined}
                 />
               </section>
             )}
@@ -334,7 +393,7 @@ export default function PlaceFinder() {
       {toast && (
         <div
           role="status"
-          className={`fixed bottom-4 left-1/2 z-50 flex max-w-[92vw] -translate-x-1/2 items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-[17px] shadow-2xl shadow-slate-900/10 glass-strong ${
+          className={`fixed inset-x-4 bottom-4 z-50 flex items-center sm:inset-x-auto sm:left-1/2 sm:max-w-[92vw] sm:-translate-x-1/2 gap-2.5 rounded-xl px-3.5 py-2.5 text-[20px] shadow-2xl shadow-slate-900/10 glass-strong ${
             toast.tone === 'error' ? 'text-red-700' : 'text-mist-100'
           }`}
         >
@@ -344,7 +403,7 @@ export default function PlaceFinder() {
               toast.tone === 'error' ? 'bg-red-400' : 'bg-aqua-400'
             }`}
           />
-          <span>{toast.message}</span>
+          <span className="min-w-0 break-words">{toast.message}</span>
           <button
             type="button"
             onClick={() => setToast(null)}
@@ -359,4 +418,38 @@ export default function PlaceFinder() {
   );
 
   return content;
+}
+
+/** The search that produced the results on screen, in one line, with a way back into the form. */
+function SearchSummary({
+  values,
+  disabled,
+  onEdit,
+}: {
+  values: SearchFormValues;
+  disabled: boolean;
+  onEdit: () => void;
+}) {
+  const what = values.keyword.trim().replace(/,\s*$/, '') || 'all';
+  return (
+    <div className="flex items-center gap-2.5 rounded-2xl border border-slate-200 border-l-4 border-l-teal-500 bg-white px-3.5 py-2.5 shadow-sm">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[19px] font-semibold text-mist-100" title={what}>
+          {what === 'all' ? 'All places' : what}
+        </p>
+        <p className="truncate text-[17px] text-mist-500" title={values.downloadPath}>
+          {values.city}, {values.country}
+          {values.downloadPath ? ` · ${values.downloadPath}` : ''}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onEdit}
+        disabled={disabled}
+        className="shrink-0 rounded-xl border border-slate-300 px-3.5 py-2 text-[18px] font-semibold text-mist-200 transition hover:border-aqua-500 hover:text-aqua-300 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Change
+      </button>
+    </div>
+  );
 }

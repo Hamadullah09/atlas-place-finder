@@ -7,6 +7,7 @@ import {
   cancelBatch,
   fetchBatchJob,
   fetchRunningBatchJob,
+  fetchSourceCatalogue,
   fetchWithTimeout,
   getNetworkStatus,
   isOffline,
@@ -21,14 +22,17 @@ import {
   type BatchRowStatus,
   type NetworkStatus,
 } from '@/lib/api';
-import { ALL_PLACES, QUICK_PICKS, isAll, keywordParts } from './SearchForm';
+import type { SourceLink } from '@/lib/types';
+import { ALL_PLACES, QUICK_PICKS, SourceAnchor, SourcesDisclosure, Toggle, isAll, keywordParts } from './SearchForm';
+import { formatDuration } from '@/lib/format';
+import { ALL_COLOUR, PRIMARY_BUTTON, pickColour } from '@/lib/palette';
 
 const POLL_MS = 3_000;
 
 const STATUS_META: Record<BatchRowStatus, { label: string; className: string }> = {
   pending: { label: 'Queued', className: 'text-mist-500' },
   searching: { label: 'Searching…', className: 'text-aqua-300' },
-  exporting: { label: 'Exporting…', className: 'text-aqua-300' },
+  exporting: { label: 'Saving…', className: 'text-aqua-300' },
   done: { label: 'Done', className: 'text-emerald-700' },
   skipped: { label: 'Skipped', className: 'text-mist-400' },
   failed: { label: 'Failed', className: 'text-red-700' },
@@ -255,26 +259,24 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
     && !starting;
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className="mx-auto w-full min-w-0 max-w-5xl">
       <div className="text-center">
-        <h1 className="text-[24px] font-semibold tracking-tight text-mist-50 sm:text-[28px]">
-          Work through a whole list of cities
+        <h1 className="text-balance text-[26px] font-semibold tracking-tight text-mist-50 sm:text-[32px]">
+          Search a whole list of cities
         </h1>
-        <p className="mx-auto mt-2 max-w-xl text-[15.5px] leading-relaxed text-mist-400">
-          Upload a CSV, set three things once, and leave it running. One folder of
-          illustrated PDFs is saved per city.
+        <p className="mx-auto mt-1.5 max-w-xl text-[18px] leading-relaxed text-mist-400 sm:text-[18px]">
+          Add a CSV, choose what to find and where to save, then leave it running.
         </p>
       </div>
 
       {/* Setup reads left-to-right: the sheet, then what to do with it. */}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
       {/* ---- Step 1: CSV -------------------------------------------------- */}
-      <section className="rounded-2xl border border-slate-200 bg-ink-850/70 p-4">
-        <SectionTitle step="1" title="Location CSV" />
-        <p className="mt-1 text-[16px] leading-snug text-mist-500">
-          Columns: Country, City, Province/State. Country may appear once and is
-          carried down. Attribute, save path and source links are pre-filled
-          from the sheet when present.
+      <section className="min-w-0 rounded-2xl border border-slate-200 border-t-4 border-t-teal-600 bg-white p-4 shadow-sm">
+        <SectionTitle step="1" title="Your list of cities" tone="bg-teal-100 text-teal-800" />
+        <p className="mt-1 text-[17px] leading-snug text-mist-500">
+          A CSV with Country, City and Province/State columns. Anything else the
+          sheet holds (search term, folder, links) is filled in for you.
         </p>
 
         <input
@@ -306,27 +308,27 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             const file = event.dataTransfer.files?.[0];
             if (file) void handleFile(file);
           }}
-          className={`mt-3 flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed px-4 py-6 transition disabled:cursor-not-allowed disabled:opacity-50 ${
+          className={`mt-3 flex w-full flex-col items-center gap-1 rounded-xl border-2 border-dashed px-4 py-5 transition sm:py-6 disabled:cursor-not-allowed disabled:opacity-50 ${
             dragging
               ? 'border-aqua-400 bg-aqua-500/10'
               : csvName
                 ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
-                : 'border-slate-300 bg-slate-50 hover:border-aqua-500/40 hover:bg-aqua-500/[0.06]'
+                : 'border-slate-300 bg-slate-50 hover:border-teal-600 hover:bg-teal-50/60'
           }`}
         >
           <span aria-hidden className="text-xl opacity-70">
             {csvName ? '✓' : '⬆'}
           </span>
-          <span className="text-[15.5px] font-semibold text-mist-100">
-            {csvName ?? 'Drop your CSV here, or click to choose'}
+          <span className="text-[18px] font-semibold text-mist-100">
+            {csvName ?? 'Choose a CSV file, or drop it here'}
           </span>
-          <span className="text-[16px] text-mist-500">
-            {csvName ? 'Click to replace' : '.csv files only'}
+          <span className="text-[17px] text-mist-500">
+            {csvName ? 'Tap to replace' : '.csv files only'}
           </span>
         </button>
 
         {preview && (
-          <div className="mt-2.5 flex flex-wrap gap-1.5 text-[16px]">
+          <div className="mt-2.5 flex flex-wrap gap-1.5 text-[17px]">
             <Chip>
               {preview.targets.filter((target) => target.kind === 'city').length} cities
             </Chip>
@@ -339,19 +341,19 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
           </div>
         )}
         {preview?.warnings.map((warning) => (
-          <p key={warning} className="mt-1.5 text-[16px] text-amber-700">
+          <p key={warning} className="mt-1.5 text-[19px] text-amber-700">
             {warning}
           </p>
         ))}
-        {previewError && <p className="mt-1.5 text-[16px] text-red-700">{previewError}</p>}
+        {previewError && <p className="mt-1.5 text-[19px] text-red-700">{previewError}</p>}
       </section>
 
       {/* ---- Step 2: session inputs -------------------------------------- */}
-      <section className="rounded-2xl border border-slate-200 bg-ink-850/70 p-4">
-        <SectionTitle step="2" title="What & where to save" />
+      <section className="min-w-0 rounded-2xl border border-slate-200 border-t-4 border-t-teal-600 bg-white p-4 shadow-sm">
+        <SectionTitle step="2" title="What to find and where to save" tone="bg-teal-100 text-teal-800" />
 
         <label className="mt-2.5 block">
-          <FieldLabel>Attribute — what to search in every city</FieldLabel>
+          <FieldLabel>What to find in every city</FieldLabel>
           <input
             className={fieldClass}
             placeholder="all"
@@ -359,15 +361,13 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
             disabled={running}
             onChange={(event) => setAttribute(event.target.value)}
           />
-          <div className="mt-2 flex flex-wrap gap-1.5">
+          <div className="chip-row mt-2 flex gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
             <button
               type="button"
               disabled={running}
               onClick={() => setAttribute(ALL_PLACES)}
-              className={`rounded-full border px-3 py-1.5 text-[15px] font-semibold transition disabled:opacity-50 ${
-                isAll(attribute)
-                  ? 'border-aqua-500 bg-aqua-500 text-white'
-                  : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
+              className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-[18px] font-semibold transition disabled:opacity-50 ${
+                isAll(attribute) ? ALL_COLOUR.on : ALL_COLOUR.idle
               }`}
             >
               All places
@@ -385,24 +385,24 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                     : [...current, pick];
                   setAttribute(next.length > 0 ? next.join(', ') : ALL_PLACES);
                 }}
-                className={`rounded-full border px-3 py-1.5 text-[15px] font-medium transition disabled:opacity-50 ${
+                className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-[18px] font-medium transition disabled:opacity-50 ${
                   !isAll(attribute) && keywordParts(attribute).includes(pick)
-                    ? 'border-aqua-500 bg-aqua-500/10 text-aqua-300'
-                    : 'border-slate-300 text-mist-300 hover:border-aqua-500 hover:text-aqua-300'
+                    ? pickColour(pick).on
+                    : pickColour(pick).idle
                 }`}
               >
-                {pick}
+                {!isAll(attribute) && keywordParts(attribute).includes(pick) ? `✓ ${pick}` : pick}
               </button>
             ))}
           </div>
         </label>
 
         <label className="mt-2.5 block">
-          <FieldLabel>Save path — folder on this computer for the results</FieldLabel>
+          <FieldLabel>Save to folder</FieldLabel>
           <div className="mt-1 flex gap-1.5">
             <input
               className={`${fieldClass} mt-0 flex-1`}
-              placeholder="C:\Users\you\Documents\PlaceFinder"
+              placeholder="e.g. D:\Places"
               value={outputPath}
               disabled={running}
               onChange={(event) => setOutputPath(event.target.value)}
@@ -411,65 +411,75 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
               type="button"
               onClick={() => void handleBrowse()}
               disabled={running || browsing}
-              className="shrink-0 rounded-xl border border-slate-300 px-3 text-[14.5px] font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-xl border border-slate-300 bg-slate-100 px-3.5 text-[18px] font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {browsing ? 'Choosing…' : 'Browse…'}
             </button>
           </div>
           {hintVisible && (
-            <span className="mt-1 block text-[15.5px] leading-snug text-aqua-300">
-              A “Browse For Folder” window is open — check your taskbar if you
-              cannot see it (it may be behind this window).
+            <span className="mt-1 block text-[18px] leading-snug text-aqua-300">
+              A folder window is open — it may be behind your browser.
             </span>
           )}
         </label>
 
-        <label className="mt-2.5 block">
-          <FieldLabel>Additional source links (comma separated)</FieldLabel>
-          <textarea
-            className={`${fieldClass} min-h-[64px] resize-y`}
-            placeholder="https://www.travelchina.org.cn/en, https://…"
-            value={sources}
-            disabled={running}
-            onChange={(event) => setSources(event.target.value)}
-          />
-        </label>
-
-        <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[14.5px] text-mist-300">
-          <input
-            type="checkbox"
-            checked={overwrite}
-            disabled={running}
-            onChange={(event) => setOverwrite(event.target.checked)}
-            className="h-3.5 w-3.5 accent-aqua-400"
-          />
-          Re-export cities that already have a folder
-        </label>
-
-        <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-[14.5px] text-mist-300">
-          <input
-            type="checkbox"
-            checked={allowDuplicates}
-            disabled={running}
-            onChange={(event) => setAllowDuplicates(event.target.checked)}
-            className="mt-0.5 h-3.5 w-3.5 accent-aqua-400"
-          />
-          <span>
-            Allow the same place to be exported again
-            <span className="block text-[15.5px] leading-snug text-mist-500">
-              Off by default: a place already in the save folder — from another
-              region, or from an earlier run — is recognised by its map id, its
-              Wikidata item, or its name and position, and is not searched again.
+        {/* Rarely changed settings, folded away so the main path is two steps. */}
+        <details className="group/options mt-3 rounded-xl border border-slate-200 bg-slate-50">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2.5 text-[18px] font-semibold text-mist-300 marker:hidden [&::-webkit-details-marker]:hidden">
+            <span className="shrink-0 whitespace-nowrap">More options</span>
+            <span className="truncate font-normal text-mist-500">
+              {[
+                overwrite ? 'redo saved cities' : null,
+                allowDuplicates ? 'repeats allowed' : null,
+                sources.trim() ? 'links added' : null,
+              ].filter(Boolean).join(' · ')}
             </span>
-          </span>
-        </label>
+            <span aria-hidden className="ml-auto transition group-open/options:rotate-180">⌄</span>
+          </summary>
 
-        <div className="mt-3 flex items-center gap-2">
+          <div className="space-y-3 border-t border-slate-200 bg-white p-3.5">
+            <Toggle
+              label="Skip places already saved"
+              hint="A place already in the folder, from this run or an earlier one, is not searched again."
+              checked={!allowDuplicates}
+              disabled={running}
+              onChange={(checked) => setAllowDuplicates(!checked)}
+            />
+            <Toggle
+              label="Redo cities that already have a folder"
+              hint="Off: those cities are skipped."
+              checked={overwrite}
+              disabled={running}
+              onChange={setOverwrite}
+            />
+
+            <label className="block">
+              <FieldLabel>Extra source links</FieldLabel>
+              <textarea
+                className={`${fieldClass} min-h-[64px] resize-y`}
+                placeholder="https://www.travelchina.org.cn/en, https://…"
+                value={sources}
+                disabled={running}
+                onChange={(event) => setSources(event.target.value)}
+              />
+              <span className="mt-1 block text-[17px] text-mist-500">Separated by commas.</span>
+            </label>
+
+            <BatchSources
+              countries={(preview?.targets ?? job?.rows ?? []).map((target) => target.country)}
+              sheetLinks={preview?.sourceLinks ?? []}
+              typed={sources}
+            />
+          </div>
+        </details>
+
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
           <button
             type="button"
             onClick={() => void handleStart()}
             disabled={!canStart}
-            className="rounded-xl bg-gradient-to-b from-aqua-400 to-aqua-600 px-4 py-2 text-[15.5px] font-semibold text-white shadow-lg shadow-aqua-500/25 transition hover:brightness-110 active:scale-95 disabled:cursor-not-allowed disabled:from-ink-700 disabled:to-ink-700 disabled:text-mist-500 disabled:shadow-none"
+            title={canStart || running ? undefined : 'Add a CSV with cities and choose the folder to save in'}
+            className={`w-full rounded-xl px-5 py-2.5 text-[19px] font-semibold sm:w-auto ${PRIMARY_BUTTON}`}
           >
             {starting ? 'Starting…' : cancelling ? 'Stopping after this place…' : running ? 'Batch running…' : 'Start batch'}
           </button>
@@ -478,7 +488,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
               type="button"
               onClick={() => void handleCancel()}
               disabled={cancelling}
-              className="rounded-xl border border-slate-300 px-3.5 py-2 text-[17px] font-semibold text-mist-200 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-[19px] font-semibold sm:w-auto text-mist-200 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {cancelling ? 'Stopping…' : 'Cancel'}
             </button>
@@ -486,7 +496,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
         </div>
         {error && (
           <div className="mt-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] p-3">
-            <p className="text-[15.5px] font-semibold text-red-700">{error}</p>
+            <p className="text-[18px] font-semibold text-red-700">{error}</p>
             {pollFailures >= 3 && running && (
               <button
                 type="button"
@@ -496,7 +506,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                   // Force re-poll by updating job reference
                   setJob((prev) => prev ? { ...prev } : null);
                 }}
-                className="mt-2 rounded-lg border border-red-500/30 px-3 py-1.5 text-[14.5px] font-semibold text-red-700 transition hover:bg-red-500/10"
+                className="mt-2 rounded-lg border border-red-500/30 px-3 py-1.5 text-[17px] font-semibold text-red-700 transition hover:bg-red-500/10"
               >
                 Retry connection
               </button>
@@ -508,13 +518,13 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
 
       {/* ---- Step 3: progress — full width, it is the long-lived view ----- */}
       {job && progress && (
-        <section className="mt-4 flex min-h-0 flex-col rounded-2xl border border-slate-200 bg-ink-850/70 p-4">
-          <SectionTitle step="3" title="Progress" />
+        <section className="mt-4 flex min-h-0 flex-col rounded-2xl border border-slate-200 border-t-4 border-t-teal-600 bg-white p-4 shadow-sm">
+          <SectionTitle step="3" title="Progress" tone="bg-teal-100 text-teal-800" />
 
           {networkStatus === 'offline' && (
             <div className="mt-2 flex items-center gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2">
               <span className="h-2 w-2 shrink-0 rounded-full bg-amber-400 animate-pulse" />
-              <span className="text-[15.5px] font-medium text-amber-700">
+              <span className="text-[18px] font-medium text-amber-700">
                 No internet connection — batch will resume when the connection returns.
               </span>
             </div>
@@ -523,19 +533,36 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
           {networkStatus === 'checking' && (
             <div className="mt-2 flex items-center gap-2 rounded-xl border border-aqua-500/25 bg-aqua-500/10 px-3 py-2">
               <span className="h-2 w-2 shrink-0 rounded-full bg-aqua-400 animate-pulse" />
-              <span className="text-[15.5px] font-medium text-aqua-300">
+              <span className="text-[18px] font-medium text-aqua-300">
                 Reconnecting…
               </span>
             </div>
           )}
 
-          <div className="mt-2 flex items-center justify-between text-[14.5px] text-mist-300">
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[17px] text-mist-300">
             <span>
               {progress.finished} / {progress.total} regions ·{' '}
               <span className="text-mist-100">{progress.places}</span> places
               {progress.failed > 0 && (
                 <span className="text-red-700"> · {progress.failed} failed</span>
               )}
+              {(() => {
+                // Time so far, and the rate the finished cities work out to. The
+                // rate stops at the last city to finish: counting the time a city
+                // still in progress has taken, but none of its places, made a run
+                // look about half as fast as it was.
+                const startedAt = Date.parse(job.startedAt);
+                const elapsed = (job.finishedAt ? Date.parse(job.finishedAt) : Date.now()) - startedAt;
+                if (!(elapsed > 0)) return null;
+                const lastFinished = Math.max(0, ...job.rows.map((r) => (r.finishedAt ? Date.parse(r.finishedAt) : 0)));
+                const measured = job.finishedAt ? elapsed : lastFinished - startedAt;
+                const rate = progress.places > 0 && measured > 0 ? Math.round(progress.places / (measured / 3_600_000)) : 0;
+                return (
+                  <span className="text-mist-400">
+                    {' '}· {formatDuration(elapsed)}{rate > 0 ? ` · about ${rate} places/hour` : ''}
+                  </span>
+                );
+              })()}
             </span>
             <span
               className={
@@ -552,17 +579,18 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
 
           <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-ink-700">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-aqua-400 to-aqua-600 transition-all"
+              className="h-full rounded-full bg-teal-600 transition-all"
               style={{ width: `${progress.total ? (progress.finished / progress.total) * 100 : 0}%` }}
             />
           </div>
 
           {/* A CSV of 70+ cities is unreadable as one long column at this
               width; three columns keeps the whole run visible at once. */}
-          <ul className="mt-3 grid max-h-[22rem] grid-cols-1 gap-x-4 gap-y-1 overflow-y-auto scroll-region pr-1 text-[14.5px] sm:grid-cols-2 xl:grid-cols-3">
+          <ul className="mt-3 grid max-h-[22rem] grid-cols-1 gap-x-4 gap-y-1 overflow-y-auto scroll-region pr-1 text-[17px] sm:grid-cols-2 xl:grid-cols-3">
             {job.rows.map((row, index) => {
               const meta = STATUS_META[row.status];
-              const active = index === job.currentIndex && job.status === 'running';
+              // Two cities can be active at once: one searched while another is written.
+              const active = job.status === 'running' && (row.status === 'searching' || row.status === 'exporting');
               return (
                 <li
                   key={`${row.country}-${row.kind}-${row.region}`}
@@ -575,7 +603,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                     {row.region}
                     <span className="text-mist-500"> · {row.country}</span>
                     {row.kind === 'province' && (
-                      <span className="ml-1 rounded bg-slate-50 px-1 text-[17px] text-mist-400">
+                      <span className="ml-1 rounded bg-ink-800 px-1 text-[15px] text-mist-400">
                         province
                       </span>
                     )}
@@ -589,7 +617,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                           .then((next) => { if (next) setJob(next); })
                           .catch(() => undefined);
                       }}
-                      className="shrink-0 rounded-md border border-slate-300 px-2 py-0.5 text-[14px] font-semibold text-mist-300 transition hover:border-aqua-500 hover:text-aqua-300"
+                      className="shrink-0 rounded-md border border-slate-300 px-2 py-0.5 text-[17px] font-semibold text-mist-300 transition hover:border-aqua-500 hover:text-aqua-300"
                     >
                       Retry
                     </button>
@@ -604,13 +632,25 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
                     }
                   >
                     {row.status === 'done' && row.placeCount !== undefined
-                      ? `${row.placeCount} places${row.duplicatesSkipped ? ` (+${row.duplicatesSkipped} dup)` : ''}`
+                      ? `${row.placeCount} places${row.duplicatesSkipped ? ` (${row.duplicatesSkipped} already saved)` : ''}`
                       : meta.label}
                   </span>
                   </div>
 
+                  {row.durationMs !== undefined ? (
+                    <p className="mt-0.5 truncate text-[16px] text-mist-500">
+                      Took {formatDuration(row.durationMs)}
+                      {row.searchMs !== undefined && ` · search ${formatDuration(row.searchMs)}`}
+                      {row.exportMs !== undefined && ` · write-ups & photos ${formatDuration(row.exportMs)}`}
+                    </p>
+                  ) : active && row.startedAt ? (
+                    <p className="mt-0.5 text-[16px] text-mist-500">
+                      Running for {formatDuration(Date.now() - Date.parse(row.startedAt))}
+                    </p>
+                  ) : null}
+
                   {active && row.progress && (
-                    <p className="mt-0.5 truncate text-[13.5px] text-aqua-700">
+                    <p className="mt-0.5 truncate text-[16px] text-aqua-700">
                       {row.progress.message}
                       {row.progress.total !== undefined && (
                         <span className="text-mist-500">
@@ -628,7 +668,7 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
           </ul>
 
           {job.notes.length > 0 && (
-            <details className="mt-2 text-[16px] text-mist-400">
+            <details className="mt-2 text-[17px] text-mist-400">
               <summary className="cursor-pointer select-none text-mist-300">
                 {job.notes.length} note(s)
               </summary>
@@ -645,13 +685,82 @@ export default function BatchPanel({ engine = 'osm' }: { engine?: 'osm' | 'googl
   );
 }
 
-const fieldClass =
-  'mt-1 w-full rounded-xl border border-slate-200 bg-ink-900/80 px-3 py-2 text-[15.5px] text-mist-50 outline-none transition placeholder:text-mist-500/60 focus:border-aqua-500/50 disabled:opacity-60';
+/**
+ * Every source a batch reads, the way single search lists them: the links in
+ * the sheet and the box above, each country's official tourism site, and the
+ * map, encyclopedia and photo services every city is searched against.
+ */
+function BatchSources({ countries, sheetLinks, typed }: { countries: string[]; sheetLinks: string[]; typed: string }) {
+  const countryKey = [...new Set(countries.map((country) => country.trim()).filter(Boolean))].sort().join('|');
+  const [catalogue, setCatalogue] = useState<SourceLink[]>([]);
 
-function SectionTitle({ step, title }: { step: string; title: string }) {
+  useEffect(() => {
+    const controller = new AbortController();
+    const list = countryKey ? countryKey.split('|') : [''];
+    void Promise.all(list.map((country) => fetchSourceCatalogue(controller.signal, country || undefined)))
+      .then((lists) => {
+        const seen = new Set<string>();
+        const merged: SourceLink[] = [];
+        for (const source of lists.flat()) {
+          const key = source.url.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          merged.push(source);
+        }
+        setCatalogue(merged);
+      });
+    return () => controller.abort();
+  }, [countryKey]);
+
+  const added = useMemo(() => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of [...sheetLinks, ...typed.split(/[,\n]+/)]) {
+      const value = raw.trim();
+      if (!value) continue;
+      try {
+        const href = new URL(value).href;
+        if (!seen.has(href.toLowerCase())) {
+          seen.add(href.toLowerCase());
+          out.push(href);
+        }
+      } catch {
+        // Half-typed or not a link: nothing to show yet.
+      }
+    }
+    return out;
+  }, [sheetLinks, typed]);
+
+  if (catalogue.length === 0 && added.length === 0) return null;
+
   return (
-    <h3 className="flex items-center gap-2 text-[17px] font-semibold text-mist-100">
-      <span className="grid h-5 w-5 place-items-center rounded-full bg-aqua-500/15 text-[16px] font-bold text-aqua-300">
+    <SourcesDisclosure
+      count={catalogue.length + added.length}
+      extra={added.length > 0 ? `${added.length} from your sheet and links` : undefined}
+      footer="Read for every city in the sheet."
+    >
+      {added.map((url) => (
+        <li key={`added-${url}`} className="flex items-baseline gap-1.5">
+          <span className="shrink-0 rounded bg-aqua-500/10 px-1.5 text-[16px] font-semibold text-aqua-300">yours</span>
+          <SourceAnchor source={{ label: new URL(url).hostname, url }} />
+        </li>
+      ))}
+      {catalogue.map((source) => (
+        <li key={source.url}>
+          <SourceAnchor source={source} />
+        </li>
+      ))}
+    </SourcesDisclosure>
+  );
+}
+
+const fieldClass =
+  'mt-1 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[18px] text-mist-50 outline-none transition placeholder:text-mist-500/60 focus:border-aqua-500/50 disabled:opacity-60';
+
+function SectionTitle({ step, title, tone }: { step: string; title: string; tone: string }) {
+  return (
+    <h3 className="flex items-center gap-2 text-[20px] font-semibold text-mist-100">
+      <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[17px] font-bold ${tone}`}>
         {step}
       </span>
       {title}
@@ -661,7 +770,7 @@ function SectionTitle({ step, title }: { step: string; title: string }) {
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
   return (
-    <span className="text-[15.5px] font-semibold uppercase tracking-wider text-mist-500">
+    <span className="text-[18px] font-semibold text-mist-300">
       {children}
     </span>
   );

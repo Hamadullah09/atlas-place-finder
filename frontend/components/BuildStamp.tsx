@@ -22,7 +22,7 @@ export default function BuildStamp() {
 
   return (
     <span
-      className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[14px] font-medium text-mist-500 sm:inline"
+      className="hidden rounded-full border border-slate-200 px-2.5 py-1 text-[17px] font-medium text-mist-500 sm:inline"
       title="The build this app was packaged from. Check it matches on every machine."
     >
       build {build}

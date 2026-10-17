@@ -47,13 +47,13 @@ export default function SearchProgressView({
   return (
     <div className="rounded-2xl border border-slate-200 bg-ink-900/60 p-4">
       <div className="flex items-baseline justify-between gap-3">
-        <p className={`text-[15.5px] font-semibold ${isFailed ? 'text-red-700' : 'text-mist-100'}`}>
+        <p className={`text-[18px] font-semibold ${isFailed ? 'text-red-700' : 'text-mist-100'}`}>
           {isFailed
             ? (progress?.message ?? 'Search failed')
             : (progress?.message ?? 'Starting…')
           }
         </p>
-        <span className={`shrink-0 font-mono text-[16px] tabular-nums ${isFailed ? 'text-red-700' : 'text-mist-400'}`}>
+        <span className={`shrink-0 font-mono text-[19px] tabular-nums ${isFailed ? 'text-red-700' : 'text-mist-400'}`}>
           {elapsed(startedAt)}
         </span>
       </div>
@@ -68,7 +68,7 @@ export default function SearchProgressView({
             <li key={step.stage} className="flex items-start gap-2.5">
               <span
                 aria-hidden
-                className={`mt-[3px] grid h-4 w-4 shrink-0 place-items-center rounded-full text-[9px] font-bold ${
+                className={`mt-[2px] grid h-5 w-5 shrink-0 place-items-center rounded-full text-[15px] font-bold ${
                   done
                     ? 'bg-emerald-500/20 text-emerald-700'
                     : active && isFailed
@@ -82,7 +82,7 @@ export default function SearchProgressView({
               </span>
               <span className="min-w-0">
                 <span
-                  className={`block text-[17px] font-medium ${
+                  className={`block text-[18px] font-medium ${
                     active && isFailed
                       ? 'text-red-700'
                       : active
@@ -100,7 +100,7 @@ export default function SearchProgressView({
                   ) : null}
                 </span>
                 {active && (
-                  <span className="block text-[15.5px] leading-snug text-mist-500">{step.hint}</span>
+                  <span className="block text-[17px] leading-snug text-mist-500">{step.hint}</span>
                 )}
               </span>
               {active && (
@@ -116,19 +116,18 @@ export default function SearchProgressView({
         })}
       </ol>
 
-      <p className="mt-3 border-t border-slate-200 pt-2.5 text-[15.5px] leading-snug text-mist-500">
+      <p className="mt-3 border-t border-slate-200 pt-2.5 text-[17px] leading-snug text-mist-500">
         {progress?.error ? (
           <span className="text-red-700">{progress.error}</span>
         ) : (
-          'Relevance checking and translation run on your local AI model, so a large '
-            + 'city can take several minutes. You can leave this running.'
+          'A large city can take several minutes. You can leave this running.'
         )}
       </p>
 
       <button
         type="button"
         onClick={onCancel}
-        className="mt-2.5 w-full rounded-xl border border-slate-300 px-3 py-1.5 text-[14.5px] font-semibold text-mist-300 transition hover:border-slate-400 hover:bg-slate-100"
+        className="mt-2.5 w-full rounded-xl border border-slate-300 px-3 py-2 text-[18px] font-semibold text-mist-300 transition hover:border-slate-400 hover:bg-slate-100"
       >
         Stop search
       </button>
